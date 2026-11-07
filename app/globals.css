@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #faf7f2;
+  --card: #ffffff;
+  --ink: #1f1a17;
+  --muted: #6f655d;
+  --line: #e8e0d6;
+  --accent: #c2410c;
+  --accent-ink: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161412;
+    --card: #201d1a;
+    --ink: #f3eee8;
+    --muted: #a59a90;
+    --line: #34302b;
+    --accent: #fb923c;
+    --accent-ink: #1a0f06;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+input, textarea {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+  color: var(--ink);
+}

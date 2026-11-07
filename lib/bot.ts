@@ -1,0 +1,177 @@
+import * as db from "./db";
+import { addDays, formatDateRange, formatTime, todayLondon } from "./dates";
+import { dedupeKey } from "./dedupe";
+import { extractPoster, parseDateReply } from "./gemini";
+import { downloadFile, escapeHtml as h, sendMessage, sendTyping, type TgMessage, type TgUpdate } from "./telegram";
+import type { EventRow } from "./types";
+
+const HELP = [
+  "Share event posters to me and I'll add them to your list.",
+  "",
+  "• Reply to one of my messages with a date (e.g. <i>next Sat 2pm</i>) to set or change it",
+  "• Reply with /delete to remove that event",
+  "• /list shows the next 7 days",
+].join("\n");
+
+export function summary(e: Pick<EventRow, "title" | "start_date" | "end_date" | "start_time" | "end_time" | "venue" | "area" | "price">): string {
+  const when = [formatDateRange(e.start_date, e.end_date), e.start_time ? formatTime(e.start_time) + (e.end_time ? `–${formatTime(e.end_time)}` : "") : ""]
+    .filter(Boolean)
+    .join(", ");
+  const where = [e.venue, e.area && !e.venue?.includes(e.area) ? e.area : null].filter(Boolean).join(", ");
+  return [`<b>${h(e.title)}</b>`, h(when), where && h(where), e.price && h(e.price)].filter(Boolean).join("\n");
+}
+
+function isAllowed(chatId: number): boolean {
+  const allowed = process.env.ALLOWED_CHAT_ID;
+  return !!allowed && allowed.split(",").map((s) => s.trim()).includes(String(chatId));
+}
+
+/** Pick the poster image from a message: the largest photo, or an image sent as a file. */
+function posterFile(msg: TgMessage) {
+  if (msg.photo?.length) {
+    const sizes = [...msg.photo].sort((a, b) => a.width - b.width);
+    const full = sizes[sizes.length - 1];
+    const thumb = sizes.find((s) => s.width >= 480) ?? full;
+    return { fileId: full.file_id, uniqueId: full.file_unique_id, thumbId: thumb.file_id };
+  }
+  if (msg.document?.mime_type?.startsWith("image/")) {
+    return { fileId: msg.document.file_id, uniqueId: msg.document.file_unique_id, thumbId: msg.document.file_id };
+  }
+  return null;
+}
+
+export async function handleUpdate(update: TgUpdate): Promise<void> {
+  const msg = update.message;
+  if (!msg) return;
+  const chatId = msg.chat.id;
+  const text = msg.text?.trim() ?? "";
+
+  if (!isAllowed(chatId)) {
+    // Let the owner discover their chat ID during setup; ignore everyone else.
+    if (text.startsWith("/start") && !process.env.ALLOWED_CHAT_ID) {
+      await sendMessage(chatId, `Your chat ID is <code>${chatId}</code>. Set it as ALLOWED_CHAT_ID in Vercel and redeploy.`);
+    }
+    return;
+  }
+
+  try {
+    const file = posterFile(msg);
+    if (file) return await handlePoster(msg, file);
+    if (msg.reply_to_message && text) return await handleReply(msg, text);
+    if (text.startsWith("/list")) return await handleList(chatId);
+    await sendMessage(chatId, HELP);
+  } catch (err) {
+    console.error("bot error", err);
+    const quota = /429|quota|RESOURCE_EXHAUSTED/i.test(String(err));
+    await sendMessage(
+      chatId,
+      quota ? "Gemini's free limit is used up for now. Send it again in a bit." : "Something went wrong reading that. Try sending it again.",
+      msg.message_id,
+    ).catch(() => {});
+  }
+}
+
+async function handlePoster(msg: TgMessage, file: { fileId: string; uniqueId: string; thumbId: string }) {
+  const chatId = msg.chat.id;
+  const same = await db.findByFileUniqueId(file.uniqueId);
+  if (same) {
+    await sendMessage(chatId, `Already have this one:\n${summary(same)}`, msg.message_id);
+    return;
+  }
+
+  await sendTyping(chatId);
+  const { bytes, mimeType } = await downloadFile(file.fileId);
+  const x = await extractPoster(bytes, mimeType, msg.caption);
+
+  if (!x.is_event || !x.title) {
+    await sendMessage(chatId, "Doesn't look like an event poster, so I skipped it.", msg.message_id);
+    return;
+  }
+
+  const key = dedupeKey(x.title, x.start_date);
+  if (key) {
+    const dup = await db.findByDedupeKey(key);
+    if (dup) {
+      await sendMessage(chatId, `Already have this one:\n${summary(dup)}`, msg.message_id);
+      return;
+    }
+  }
+
+  const row = await db.insertEvent({
+    title: x.title,
+    start_date: x.start_date,
+    end_date: x.end_date,
+    start_time: x.start_time,
+    end_time: x.end_time,
+    venue: x.venue,
+    area: x.area,
+    price: x.price,
+    description: x.description,
+    file_id: file.fileId,
+    thumb_file_id: file.thumbId,
+    file_unique_id: file.uniqueId,
+    chat_id: chatId,
+    status: x.start_date ? "active" : "pending",
+    dedupe_key: key,
+  });
+  if (!row) {
+    // Lost a race with an identical poster sent at the same moment.
+    await sendMessage(chatId, "Already have this one.", msg.message_id);
+    return;
+  }
+
+  const reply = row.status === "pending"
+    ? `Added, but I couldn't find a date:\n${summary(row)}\n\n<b>Reply to this message with the date</b> (e.g. <i>Sat 14 Nov 6pm</i>).`
+    : `Added:\n${summary(row)}`;
+  const sent = await sendMessage(chatId, reply, msg.message_id);
+  await db.setBotMessage(row.id, sent.message_id);
+}
+
+async function handleReply(msg: TgMessage, text: string) {
+  const chatId = msg.chat.id;
+  const event = await db.findByBotMessage(chatId, msg.reply_to_message!.message_id);
+  if (!event) {
+    await sendMessage(chatId, "Reply to one of my “Added” messages to change that event.", msg.message_id);
+    return;
+  }
+
+  if (text.startsWith("/delete")) {
+    await db.deleteEvent(event.id);
+    await sendMessage(chatId, `Deleted <b>${h(event.title)}</b>.`, msg.message_id);
+    return;
+  }
+
+  const d = await parseDateReply(text, event.title);
+  if (!d.start_date) {
+    await sendMessage(chatId, "I couldn't work out a date from that. Try something like <i>Sat 14 Nov 6pm</i>.", msg.message_id);
+    return;
+  }
+
+  const updated = {
+    ...event,
+    start_date: d.start_date,
+    end_date: d.end_date,
+    start_time: d.start_time ?? event.start_time,
+    end_time: d.start_time ? d.end_time : event.end_time,
+    status: "active" as const,
+    dedupe_key: dedupeKey(event.title, d.start_date),
+  };
+  const ok = await db.updateEvent(event.id, updated);
+  if (!ok) {
+    await db.deleteEvent(event.id);
+    await sendMessage(chatId, "That makes it a duplicate of an event I already have, so I removed this copy.", msg.message_id);
+    return;
+  }
+  const sent = await sendMessage(chatId, `Updated:\n${summary(updated)}`, msg.message_id);
+  await db.setBotMessage(event.id, sent.message_id);
+}
+
+async function handleList(chatId: number) {
+  const today = todayLondon();
+  const events = await db.eventsBetween(today, addDays(today, 6));
+  if (!events.length) {
+    await sendMessage(chatId, "Nothing in the next 7 days.");
+    return;
+  }
+  await sendMessage(chatId, events.map(summary).join("\n\n"));
+}
