@@ -5,7 +5,8 @@ import type { DateReply, Extraction } from "./types";
 
 // Free-tier latency varies a lot by model: some newer Flash models queue for minutes.
 // Try each model in turn with a time limit so the bot always answers.
-const DEFAULT_MODELS = ["gemini-3.5-flash", "gemini-3.5-flash-lite"];
+// Flash-Lite first: fast, and the most generous free daily allowance (~500/day vs ~20 for Flash).
+const DEFAULT_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
 const ATTEMPT_TIMEOUT_MS = 25_000;
 
 function models(): string[] {

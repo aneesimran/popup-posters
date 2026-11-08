@@ -22,7 +22,7 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
    - `TELEGRAM_BOT_TOKEN`: from step 1
    - `TELEGRAM_WEBHOOK_SECRET`: any long random string (`openssl rand -hex 32`)
    - `GEMINI_API_KEY`: from step 2
-   - `GEMINI_MODEL`: optional; leave unset. The app uses `gemini-3.5-flash` and falls back to `gemini-3.5-flash-lite`
+   - `GEMINI_MODEL`: optional; leave unset. The app uses `gemini-3.5-flash-lite` and falls back to `gemini-3.5-flash`
    - `APP_PASSCODE`: the passcode for the web page
    - leave `ALLOWED_CHAT_ID` for step 7
 
