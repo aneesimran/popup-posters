@@ -11,7 +11,8 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
 - No date on the poster? The bot asks. **Reply to its message** with something like `Sat 14 Nov 6pm` or `next Saturday`.
 - Reply `/delete` to a bot message to remove that event. `/list` shows the next 7 days.
 - Memes and non-event images are skipped. The same poster sent twice is only stored once.
-- The web page groups events by day, filters by area, hides past events, and lets you edit, delete or add an event to your calendar.
+- Each event shows how far it is from home (straight-line miles), found from the poster's postcode, venue or area.
+- The web page groups events by day and filters by date (today, this weekend, next 7 days, this month), distance (within 1/3/5/10 miles, or nearest first) and area. Past events are hidden. You can edit, delete or add an event to your calendar.
 
 ## Setup (one-off, about 15 minutes)
 
@@ -24,6 +25,7 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
    - `GEMINI_API_KEY`: from step 2
    - `GEMINI_MODEL`: optional; leave unset. The app uses `gemini-3.5-flash-lite` and falls back to `gemini-3.5-flash`
    - `APP_PASSCODE`: the passcode for the web page
+   - `HOME_POSTCODE`: your postcode, for "miles from home" and the distance filter
    - leave `ALLOWED_CHAT_ID` for step 7
 
    Then redeploy.
@@ -31,7 +33,7 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
 6. **Create the table and connect the bot.**
    ```bash
    npm install
-   npm run db:init
+   npm run db:init        # safe to re-run; also applies new columns
    npm run set-webhook -- https://YOUR-APP.vercel.app
    ```
 7. **Lock the bot to you.** Send `/start` to your bot. It replies with your chat ID. Add it as `ALLOWED_CHAT_ID` in Vercel and redeploy. Until this is set, the bot ignores everything except `/start`.
@@ -44,3 +46,5 @@ npm test         # unit tests
 ```
 
 Free-tier note: Google may use content sent on the Gemini API free tier to improve its models. Public event posters are fine, but don't send anything private to the bot.
+
+After changing `HOME_POSTCODE` nothing needs re-running: distances are worked out when the page loads. `npm run geo:backfill` fills in locations for any events that are missing one.

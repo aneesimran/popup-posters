@@ -22,3 +22,9 @@ create unique index if not exists events_dedupe_key on events (dedupe_key);
 create index if not exists events_start_date on events (start_date);
 create index if not exists events_file_unique_id on events (file_unique_id);
 create index if not exists events_bot_msg on events (chat_id, bot_msg_id);
+
+-- Location (added for distance from home)
+alter table events add column if not exists postcode text;
+alter table events add column if not exists lat double precision;
+alter table events add column if not exists lng double precision;
+alter table events add column if not exists geo_source text;  -- postcode | venue | area

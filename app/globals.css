@@ -45,3 +45,11 @@ input, textarea {
   width: 100%;
   color: var(--ink);
 }
+
+/* Horizontally scrolling chip rows: swipeable without a visible scrollbar */
+.chip-row {
+  scrollbar-width: none;
+}
+.chip-row::-webkit-scrollbar {
+  display: none;
+}

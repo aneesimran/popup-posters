@@ -2,98 +2,162 @@ import Link from "next/link";
 import EventCard from "./components/EventCard";
 import * as db from "@/lib/db";
 import { dayLabel, todayLondon } from "@/lib/dates";
+import { WHEN_OPTIONS, WITHIN_OPTIONS, overlaps, parseWhen, parseWithin, whenRange } from "@/lib/filters";
+import { distanceFromHome, homePoint } from "@/lib/geo";
 import type { EventRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+type Params = { area?: string; past?: string; when?: string; within?: string; sort?: string };
+type Item = { e: EventRow; miles: number | null };
+
 const areaKey = (a: string | null) => a?.trim().toLowerCase() ?? "";
 
-function groupByDay(events: EventRow[], today: string) {
-  const groups = new Map<string, EventRow[]>();
-  for (const e of events) {
+function groupByDay(items: Item[], today: string) {
+  const groups = new Map<string, Item[]>();
+  for (const item of items) {
     // Multi-day events that started already show under today.
-    const day = e.start_date! < today ? today : e.start_date!;
-    groups.set(day, [...(groups.get(day) ?? []), e]);
+    const day = item.e.start_date! < today ? today : item.e.start_date!;
+    groups.set(day, [...(groups.get(day) ?? []), item]);
   }
   return [...groups.entries()];
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ area?: string; past?: string }> }) {
-  const { area, past } = await searchParams;
-  const showPast = past === "1";
-  const today = todayLondon();
-  const [events, pending] = await Promise.all([
-    showPast ? db.pastEvents(today) : db.upcomingEvents(today),
-    showPast ? Promise.resolve([]) : db.pendingEvents(),
-  ]);
-
-  const areas = new Map<string, string>();
-  for (const e of events) if (e.area && !areas.has(areaKey(e.area))) areas.set(areaKey(e.area), e.area);
-  const sortedAreas = [...areas.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  const selected = area ? areaKey(area) : "";
-  const shown = selected ? events.filter((e) => areaKey(e.area) === selected) : events;
-
-  const href = (params: { area?: string; past?: boolean }) => {
-    const q = new URLSearchParams();
-    if (params.area) q.set("area", params.area);
-    if (params.past) q.set("past", "1");
-    const s = q.toString();
-    return s ? `/?${s}` : "/";
-  };
-
-  const chip = (label: string, active: boolean, to: string) => (
+function Chip({ label, active, href }: { label: string; active: boolean; href: string }) {
+  return (
     <Link
-      key={label}
-      href={to}
+      href={href}
+      scroll={false}
       className={`shrink-0 rounded-full border px-3 py-1 text-sm ${active ? "border-accent bg-accent text-accent-ink" : "border-line bg-card text-ink"}`}
     >
       {label}
     </Link>
   );
+}
+
+function ChipRow({ children }: { children: React.ReactNode }) {
+  return <div className="chip-row -mx-4 flex gap-2 overflow-x-auto px-4">{children}</div>;
+}
+
+const Grid = ({ children }: { children: React.ReactNode }) => (
+  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">{children}</div>
+);
+
+export default async function Home({ searchParams }: { searchParams: Promise<Params> }) {
+  const params = await searchParams;
+  const showPast = params.past === "1";
+  const when = showPast ? null : parseWhen(params.when);
+  const within = parseWithin(params.within);
+  const nearestFirst = params.sort === "near";
+  const today = todayLondon();
+
+  const [events, pending, home] = await Promise.all([
+    showPast ? db.pastEvents(today) : db.upcomingEvents(today),
+    showPast ? Promise.resolve([]) : db.pendingEvents(),
+    homePoint(),
+  ]);
+
+  const withMiles = (e: EventRow): Item => ({ e, miles: distanceFromHome(e, home) });
+  const all = events.map(withMiles);
+
+  const areas = new Map<string, string>();
+  for (const { e } of all) if (e.area && !areas.has(areaKey(e.area))) areas.set(areaKey(e.area), e.area);
+  const sortedAreas = [...areas.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  const selectedArea = params.area ? areaKey(params.area) : "";
+
+  let shown = all;
+  if (selectedArea) shown = shown.filter(({ e }) => areaKey(e.area) === selectedArea);
+  if (when) {
+    const range = whenRange(when, today);
+    shown = shown.filter(({ e }) => overlaps(e, range));
+  }
+  const unlocated = within ? shown.filter((i) => i.miles == null).length : 0;
+  if (within) shown = shown.filter((i) => i.miles != null && i.miles <= within);
+  if (nearestFirst) shown = [...shown].sort((a, b) => (a.miles ?? Infinity) - (b.miles ?? Infinity));
+
+  const href = (change: Partial<Params>) => {
+    const next = { ...params, ...change };
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(next)) if (v) q.set(k, v);
+    const s = q.toString();
+    return s ? `/?${s}` : "/";
+  };
+
+  const hasDistances = !!home && all.some((i) => i.miles != null);
+  const filtered = !!(selectedArea || when || within);
 
   return (
     <main>
       <header className="flex items-baseline justify-between py-5">
         <h1 className="text-2xl font-semibold">Popup Posters</h1>
-        <Link href={href({ area, past: !showPast })} className="text-sm text-accent">
+        <Link href={showPast ? "/" : "/?past=1"} className="text-sm text-accent">
           {showPast ? "Upcoming" : "Past events"}
         </Link>
       </header>
 
-      {sortedAreas.length > 1 && (
-        <nav className="-mx-4 mb-6 flex gap-2 overflow-x-auto px-4 pb-1">
-          {chip("All areas", !selected, href({ past: showPast }))}
-          {sortedAreas.map(([key, label]) => chip(label, selected === key, href({ area: label, past: showPast })))}
-        </nav>
-      )}
+      <nav className="mb-6 space-y-2">
+        {!showPast && (
+          <ChipRow>
+            <Chip label="Any time" active={!when} href={href({ when: undefined })} />
+            {WHEN_OPTIONS.map((o) => (
+              <Chip key={o.value} label={o.label} active={when === o.value} href={href({ when: o.value })} />
+            ))}
+          </ChipRow>
+        )}
+        {hasDistances && (
+          <ChipRow>
+            <Chip label="Any distance" active={!within} href={href({ within: undefined })} />
+            {WITHIN_OPTIONS.map((m) => (
+              <Chip key={m} label={`Within ${m} mi`} active={within === m} href={href({ within: String(m) })} />
+            ))}
+            <Chip
+              label={nearestFirst ? "Nearest first ✓" : "Nearest first"}
+              active={nearestFirst}
+              href={href({ sort: nearestFirst ? undefined : "near" })}
+            />
+          </ChipRow>
+        )}
+        {sortedAreas.length > 1 && (
+          <ChipRow>
+            <Chip label="All areas" active={!selectedArea} href={href({ area: undefined })} />
+            {sortedAreas.map(([key, label]) => (
+              <Chip key={key} label={label} active={selectedArea === key} href={href({ area: label })} />
+            ))}
+          </ChipRow>
+        )}
+      </nav>
 
-      {pending.length > 0 && (
+      {pending.length > 0 && !filtered && (
         <section className="mb-8 rounded-xl border border-dashed border-accent/60 p-4">
           <h2 className="mb-1 font-semibold">Needs a date</h2>
-          <p className="mb-3 text-sm text-muted">Reply to the bot's message with the date, or tap one to edit it here.</p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {pending.map((e) => <EventCard key={e.id} e={e} />)}
-          </div>
+          <p className="mb-3 text-sm text-muted">Reply to the bot&apos;s message with the date, or tap one to edit it here.</p>
+          <Grid>{pending.map((e) => <EventCard key={e.id} e={e} miles={distanceFromHome(e, home)} />)}</Grid>
         </section>
       )}
 
       {shown.length === 0 ? (
         <p className="mt-16 text-center text-muted">
-          {showPast ? "No past events yet." : "No upcoming events. Share a poster to your Telegram bot to add one."}
+          {filtered
+            ? "Nothing matches these filters."
+            : showPast
+              ? "No past events yet."
+              : "No upcoming events. Share a poster to your Telegram bot to add one."}
         </p>
-      ) : showPast ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {shown.map((e) => <EventCard key={e.id} e={e} showDate />)}
-        </div>
+      ) : showPast || nearestFirst ? (
+        <Grid>{shown.map(({ e, miles }) => <EventCard key={e.id} e={e} miles={miles} showDate />)}</Grid>
       ) : (
         groupByDay(shown, today).map(([day, items]) => (
           <section key={day} className="mb-8">
             <h2 className="sticky top-0 z-10 -mx-4 mb-3 bg-bg/90 px-4 py-2 text-lg font-semibold backdrop-blur">{dayLabel(day, today)}</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {items.map((e) => <EventCard key={e.id} e={e} />)}
-            </div>
+            <Grid>{items.map(({ e, miles }) => <EventCard key={e.id} e={e} miles={miles} />)}</Grid>
           </section>
         ))
+      )}
+
+      {unlocated > 0 && (
+        <p className="mt-6 text-center text-sm text-muted">
+          {unlocated} event{unlocated === 1 ? "" : "s"} without a known location {unlocated === 1 ? "is" : "are"} hidden. Add a postcode or area on the event page to include {unlocated === 1 ? "it" : "them"}.
+        </p>
       )}
     </main>
   );

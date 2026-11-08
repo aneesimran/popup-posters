@@ -10,10 +10,11 @@ export async function insertEvent(e: NewEvent): Promise<EventRow | null> {
   // dedupe_key is unique; a clash means we already have this event.
   const rows = (await sql()`
     insert into events (title, start_date, end_date, start_time, end_time, venue, area, price, description,
-                        file_id, thumb_file_id, file_unique_id, chat_id, status, dedupe_key)
+                        file_id, thumb_file_id, file_unique_id, chat_id, status, dedupe_key,
+                        postcode, lat, lng, geo_source)
     values (${e.title}, ${e.start_date}, ${e.end_date}, ${e.start_time}, ${e.end_time}, ${e.venue}, ${e.area},
             ${e.price}, ${e.description}, ${e.file_id}, ${e.thumb_file_id}, ${e.file_unique_id}, ${e.chat_id},
-            ${e.status}, ${e.dedupe_key})
+            ${e.status}, ${e.dedupe_key}, ${e.postcode}, ${e.lat}, ${e.lng}, ${e.geo_source})
     on conflict (dedupe_key) do nothing
     returning *`) as EventRow[];
   return rows[0] ?? null;
@@ -51,6 +52,7 @@ export async function deleteEvent(id: number) {
 export type EventUpdate = Pick<
   EventRow,
   "title" | "start_date" | "end_date" | "start_time" | "end_time" | "venue" | "area" | "price" | "description" | "status" | "dedupe_key"
+  | "postcode" | "lat" | "lng" | "geo_source"
 >;
 
 /** Returns false if the new dedupe_key clashes with another event. */
@@ -59,7 +61,8 @@ export async function updateEvent(id: number, u: EventUpdate): Promise<boolean> 
     await sql()`
       update events set title = ${u.title}, start_date = ${u.start_date}, end_date = ${u.end_date},
         start_time = ${u.start_time}, end_time = ${u.end_time}, venue = ${u.venue}, area = ${u.area},
-        price = ${u.price}, description = ${u.description}, status = ${u.status}, dedupe_key = ${u.dedupe_key}
+        price = ${u.price}, description = ${u.description}, status = ${u.status}, dedupe_key = ${u.dedupe_key},
+        postcode = ${u.postcode}, lat = ${u.lat}, lng = ${u.lng}, geo_source = ${u.geo_source}
       where id = ${id}`;
     return true;
   } catch (err) {
@@ -93,4 +96,12 @@ export async function eventsBetween(from: string, to: string): Promise<EventRow[
     select * from events
     where status = 'active' and coalesce(end_date, start_date) >= ${from} and start_date <= ${to}
     order by start_date, start_time nulls last`) as EventRow[];
+}
+
+export async function setLocation(id: number, geo: { lat: number; lng: number; source: string } | null) {
+  await sql()`update events set lat = ${geo?.lat ?? null}, lng = ${geo?.lng ?? null}, geo_source = ${geo?.source ?? null} where id = ${id}`;
+}
+
+export async function eventsMissingLocation(): Promise<EventRow[]> {
+  return (await sql()`select * from events where lat is null and (venue is not null or area is not null or postcode is not null)`) as EventRow[];
 }

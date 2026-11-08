@@ -16,6 +16,10 @@ export type EventRow = {
   bot_msg_id: number | null;
   status: "active" | "pending";
   dedupe_key: string | null;
+  postcode: string | null;
+  lat: number | null;
+  lng: number | null;
+  geo_source: "postcode" | "venue" | "area" | null;
   created_at: string;
 };
 
@@ -30,6 +34,7 @@ export type Extraction = {
   area: string | null;
   price: string | null;
   description: string | null;
+  postcode: string | null;
 };
 
 export type DateReply = {

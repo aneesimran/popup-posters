@@ -31,6 +31,11 @@ vi.mock("./telegram", () => ({
   downloadFile: async () => ({ bytes: new Uint8Array([1]), mimeType: "image/jpeg" }),
   escapeHtml: (s: string) => s,
 }));
+vi.mock("./geo", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./geo")>()),
+  homePoint: async () => ({ lat: 51.5416, lng: -0.0033 }), // Stratford station
+  locateEvent: async () => ({ lat: 51.5590, lng: 0.0741, source: "venue" }), // Ilford Town Hall
+}));
 vi.mock("./gemini", () => ({
   extractPoster: async () => extraction,
   parseDateReply: async () => dateReply,
@@ -53,7 +58,7 @@ const text = (t: string, replyTo?: number) => ({
 });
 const event = (over: Partial<Extraction> = {}): Extraction => ({
   is_event: true, title: "Winter Night Market", start_date: "2026-11-14", end_date: null, start_time: "18:00",
-  end_time: null, venue: "Ilford Town Hall", area: "Ilford", price: "Free", description: null, ...over,
+  end_time: null, venue: "Ilford Town Hall", area: "Ilford", price: "Free", description: null, postcode: null, ...over,
 });
 const last = () => sent[sent.length - 1].text;
 
@@ -68,8 +73,9 @@ describe("handleUpdate", () => {
     extraction = event();
     await handleUpdate(photo("a"));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ status: "active", area: "Ilford", bot_msg_id: 1001 });
+    expect(rows[0]).toMatchObject({ status: "active", area: "Ilford", bot_msg_id: 1001, geo_source: "venue" });
     expect(last()).toContain("Added:");
+    expect(last()).toMatch(/Ilford Town Hall · \d\.\d mi from home/);
     expect(last()).toContain("Sat 14 Nov, 6pm");
   });
 

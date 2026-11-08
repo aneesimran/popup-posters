@@ -1,4 +1,5 @@
 import { isValidDate, isValidTime } from "./dates";
+import { normalizePostcode } from "./geo";
 import type { DateReply, Extraction } from "./types";
 
 function str(v: unknown, max = 300): string | null {
@@ -29,6 +30,7 @@ export function normalizeExtraction(input: unknown): Extraction {
     area: str(raw.area, 60),
     price: str(raw.price, 60),
     description: str(raw.description, 400),
+    postcode: normalizePostcode(raw.postcode),
   };
 }
 

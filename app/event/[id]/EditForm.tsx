@@ -27,6 +27,7 @@ export default function EditForm({ e }: { e: EventRow }) {
       <Field label="Venue"><input name="venue" defaultValue={e.venue ?? ""} /></Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Area"><input name="area" defaultValue={e.area ?? ""} /></Field>
+        <Field label="Postcode"><input name="postcode" defaultValue={e.postcode ?? ""} autoCapitalize="characters" /></Field>
         <Field label="Price"><input name="price" defaultValue={e.price ?? ""} /></Field>
       </div>
       <Field label="Description"><textarea name="description" rows={3} defaultValue={e.description ?? ""} /></Field>

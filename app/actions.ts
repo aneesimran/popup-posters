@@ -7,6 +7,7 @@ import { SESSION_COOKIE, safeEqual, sessionToken } from "@/lib/auth";
 import * as db from "@/lib/db";
 import { isValidDate, isValidTime } from "@/lib/dates";
 import { dedupeKey } from "@/lib/dedupe";
+import { homePoint, locateEvent, normalizePostcode } from "@/lib/geo";
 
 async function requireSession() {
   const jar = await cookies();
@@ -47,14 +48,31 @@ export async function saveEvent(id: number, _prev: string | null, form: FormData
   if (start_time && !isValidTime(start_time)) return "Start time looks wrong.";
   if (end_time && !isValidTime(end_time)) return "End time looks wrong.";
 
+  const existing = await db.getEvent(id);
+  if (!existing) return "This event no longer exists.";
+  const rawPostcode = text(form, "postcode");
+  const postcode = rawPostcode ? normalizePostcode(rawPostcode) : null;
+  if (rawPostcode && !postcode) return "Postcode looks wrong.";
+  const venue = text(form, "venue");
+  const area = text(form, "area");
+
+  // Only look the location up again if something about it changed.
+  let geo = { lat: existing.lat, lng: existing.lng, geo_source: existing.geo_source };
+  if (venue !== existing.venue || area !== existing.area || postcode !== existing.postcode || existing.lat == null) {
+    const found = await locateEvent({ postcode, venue, area }, await homePoint()).catch(() => null);
+    geo = { lat: found?.lat ?? null, lng: found?.lng ?? null, geo_source: found?.source ?? null };
+  }
+
   const ok = await db.updateEvent(id, {
     title,
     start_date,
     end_date: end_date === start_date ? null : end_date,
     start_time,
     end_time: start_time ? end_time : null,
-    venue: text(form, "venue"),
-    area: text(form, "area"),
+    venue,
+    area,
+    postcode,
+    ...geo,
     price: text(form, "price"),
     description: text(form, "description"),
     status: start_date ? "active" : "pending",

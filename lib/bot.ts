@@ -2,6 +2,7 @@ import * as db from "./db";
 import { addDays, formatDateRange, formatTime, todayLondon } from "./dates";
 import { dedupeKey } from "./dedupe";
 import { extractPoster, parseDateReply } from "./gemini";
+import { distanceFromHome, formatMiles, homePoint, locateEvent, type Point } from "./geo";
 import { downloadFile, escapeHtml as h, sendMessage, sendTyping, type TgMessage, type TgUpdate } from "./telegram";
 import type { EventRow } from "./types";
 
@@ -13,12 +14,17 @@ const HELP = [
   "• /list shows the next 7 days",
 ].join("\n");
 
-export function summary(e: Pick<EventRow, "title" | "start_date" | "end_date" | "start_time" | "end_time" | "venue" | "area" | "price">): string {
+type Summarisable = Pick<EventRow, "title" | "start_date" | "end_date" | "start_time" | "end_time" | "venue" | "area" | "price"> &
+  Partial<Pick<EventRow, "lat" | "lng">>;
+
+export function summary(e: Summarisable, home: Point | null = null): string {
   const when = [formatDateRange(e.start_date, e.end_date), e.start_time ? formatTime(e.start_time) + (e.end_time ? `–${formatTime(e.end_time)}` : "") : ""]
     .filter(Boolean)
     .join(", ");
   const where = [e.venue, e.area && !e.venue?.includes(e.area) ? e.area : null].filter(Boolean).join(", ");
-  return [`<b>${h(e.title)}</b>`, h(when), where && h(where), e.price && h(e.price)].filter(Boolean).join("\n");
+  const miles = distanceFromHome({ lat: e.lat ?? null, lng: e.lng ?? null }, home);
+  const whereLine = [where, miles != null ? `${formatMiles(miles)} from home` : ""].filter(Boolean).join(" · ");
+  return [`<b>${h(e.title)}</b>`, h(when), whereLine && h(whereLine), e.price && h(e.price)].filter(Boolean).join("\n");
 }
 
 function isAllowed(chatId: number): boolean {
@@ -97,6 +103,9 @@ async function handlePoster(msg: TgMessage, file: { fileId: string; uniqueId: st
     }
   }
 
+  const home = await homePoint();
+  const geo = await locateEvent(x, home).catch(() => null);
+
   const row = await db.insertEvent({
     title: x.title,
     start_date: x.start_date,
@@ -113,6 +122,10 @@ async function handlePoster(msg: TgMessage, file: { fileId: string; uniqueId: st
     chat_id: chatId,
     status: x.start_date ? "active" : "pending",
     dedupe_key: key,
+    postcode: x.postcode,
+    lat: geo?.lat ?? null,
+    lng: geo?.lng ?? null,
+    geo_source: geo?.source ?? null,
   });
   if (!row) {
     // Lost a race with an identical poster sent at the same moment.
@@ -121,8 +134,8 @@ async function handlePoster(msg: TgMessage, file: { fileId: string; uniqueId: st
   }
 
   const reply = row.status === "pending"
-    ? `Added, but I couldn't find a date:\n${summary(row)}\n\n<b>Reply to this message with the date</b> (e.g. <i>Sat 14 Nov 6pm</i>).`
-    : `Added:\n${summary(row)}`;
+    ? `Added, but I couldn't find a date:\n${summary(row, home)}\n\n<b>Reply to this message with the date</b> (e.g. <i>Sat 14 Nov 6pm</i>).`
+    : `Added:\n${summary(row, home)}`;
   const sent = await sendMessage(chatId, reply, msg.message_id);
   await db.setBotMessage(row.id, sent.message_id);
 }
@@ -162,7 +175,7 @@ async function handleReply(msg: TgMessage, text: string) {
     await sendMessage(chatId, "That makes it a duplicate of an event I already have, so I removed this copy.", msg.message_id);
     return;
   }
-  const sent = await sendMessage(chatId, `Updated:\n${summary(updated)}`, msg.message_id);
+  const sent = await sendMessage(chatId, `Updated:\n${summary(updated, await homePoint())}`, msg.message_id);
   await db.setBotMessage(event.id, sent.message_id);
 }
 
@@ -173,5 +186,6 @@ async function handleList(chatId: number) {
     await sendMessage(chatId, "Nothing in the next 7 days.");
     return;
   }
-  await sendMessage(chatId, events.map(summary).join("\n\n"));
+  const home = await homePoint();
+  await sendMessage(chatId, events.map((e) => summary(e, home)).join("\n\n"));
 }

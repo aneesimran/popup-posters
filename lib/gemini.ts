@@ -65,10 +65,11 @@ const posterSchema = {
       ...nullableString,
       description: "Town or neighbourhood only, e.g. 'Ilford', 'Stratford', 'New Cross', 'Leicester'. If not printed, infer it from the venue, street or postcode when you are confident.",
     },
+    postcode: { ...nullableString, description: "UK postcode exactly as printed on the poster, else null. Never invent one." },
     price: { ...nullableString, description: "e.g. 'Free', '£5', '£10–£15'" },
     description: { ...nullableString, description: "One short sentence on what the event is" },
   },
-  required: ["is_event", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "price", "description"],
+  required: ["is_event", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "postcode", "price", "description"],
 };
 
 const dateSchema = {

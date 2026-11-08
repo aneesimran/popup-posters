@@ -4,6 +4,7 @@ import DeleteButton from "./DeleteButton";
 import EditForm from "./EditForm";
 import { getEvent } from "@/lib/db";
 import { formatDateRange, formatTime } from "@/lib/dates";
+import { distanceFromHome, formatMiles, homePoint } from "@/lib/geo";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,8 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
 
   const image = `/api/image/${encodeURIComponent(e.file_id)}`;
   const time = e.start_time ? formatTime(e.start_time) + (e.end_time ? `–${formatTime(e.end_time)}` : "") : null;
-  const mapQuery = [e.venue, e.area].filter(Boolean).join(", ");
+  const mapQuery = [e.venue, e.area, e.postcode].filter(Boolean).join(", ");
+  const miles = distanceFromHome(e, await homePoint());
 
   return (
     <main>
@@ -41,6 +43,11 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
               >
                 {mapQuery}
               </a>
+            )}
+            {miles != null && (
+              <p className="text-sm text-muted">
+                {formatMiles(miles)} from home{e.geo_source === "area" ? " (roughly; based on the area)" : ""}
+              </p>
             )}
             {e.price && <p className="font-medium text-accent">{e.price}</p>}
             {e.description && <p className="pt-2 text-muted">{e.description}</p>}

@@ -9,7 +9,8 @@
     "start": "next start",
     "test": "vitest run",
     "db:init": "node --env-file=.env.local scripts/init-db.mjs",
-    "set-webhook": "node --env-file=.env.local scripts/set-webhook.mjs"
+    "set-webhook": "node --env-file=.env.local scripts/set-webhook.mjs",
+    "geo:backfill": "tsx --env-file=.env.local scripts/backfill-geo.ts"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.3.0",
     "postcss": "^8.5.32",
     "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
   }
