@@ -5,6 +5,7 @@ async function call<T>(method: string, body: Record<string, unknown>): Promise<T
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
   });
   const json = (await res.json()) as { ok: boolean; result: T; description?: string };
   if (!json.ok) throw new Error(`Telegram ${method} failed: ${json.description}`);
@@ -43,7 +44,9 @@ export function sendTyping(chatId: number) {
 export async function downloadFile(fileId: string): Promise<{ bytes: Uint8Array; mimeType: string }> {
   const file = await call<{ file_path?: string }>("getFile", { file_id: fileId });
   if (!file.file_path) throw new Error("Telegram returned no file_path");
-  const res = await fetch(`https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`);
+  const res = await fetch(`https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${file.file_path}`, {
+    signal: AbortSignal.timeout(20_000),
+  });
   if (!res.ok) throw new Error(`Telegram file download failed: ${res.status}`);
   const ext = file.file_path.split(".").pop()?.toLowerCase();
   const mimeType = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";

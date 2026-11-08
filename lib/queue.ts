@@ -16,9 +16,15 @@ export type PosterJob = {
 
 /** Minimum gap between Gemini calls (Flash-Lite free tier: 10 a minute). */
 export const SPACING_MS = 7_000;
-/** How long one worker run keeps going before handing over to a fresh function call. */
-export const WORKER_BUDGET_MS = 85_000;
-const LEASE_SECONDS = 115; // a little under the route's maxDuration of 120s
+/**
+ * A worker run only *starts* new posters within this window, then hands over to a fresh
+ * function call. One poster can take ~70s in the worst case (Telegram download, two Gemini
+ * attempts, location lookups), so this leaves plenty of room under the routes' maxDuration (300s).
+ */
+export const WORKER_BUDGET_MS = 60_000;
+/** Longest a single wait (spacing, rate-limit pause, waiting for a retry) may last. */
+const MAX_WAIT_MS = 30_000;
+const LEASE_SECONDS = 290; // just under maxDuration, so a killed worker's lease soon expires
 /** Give up on a poster after this many failed attempts. */
 export const MAX_ATTEMPTS = 6;
 
@@ -84,6 +90,60 @@ export async function claimBatchNotice(): Promise<boolean> {
   return rows.length > 0;
 }
 
+export type Outcome = "added" | "needs_date" | "existing" | "not_poster" | "failed";
+
+export type BatchTotals = {
+  chat_id: number | null;
+  added: number;
+  needs_date: number;
+  existing: number;
+  not_poster: number;
+  failed: number;
+};
+
+/** Seconds of no new posters before a batch counts as finished. */
+export const QUIET_SECONDS = 12;
+
+/** Add one poster's result to the running batch totals. */
+export async function recordOutcome(chatId: number, outcome: Outcome) {
+  const one = (o: Outcome) => (o === outcome ? 1 : 0);
+  await sql()`
+    update bot_state set
+      batch_chat_id = ${chatId},
+      batch_added = batch_added + ${one("added")},
+      batch_needs_date = batch_needs_date + ${one("needs_date")},
+      batch_existing = batch_existing + ${one("existing")},
+      batch_not_poster = batch_not_poster + ${one("not_poster")},
+      batch_failed = batch_failed + ${one("failed")},
+      last_activity_at = now()
+    where id = 1`;
+}
+
+/** Note that posters are still arriving, so the summary waits. */
+export async function touchActivity() {
+  await sql()`update bot_state set last_activity_at = now() where id = 1`;
+}
+
+/**
+ * If the batch has gone quiet, take its totals and reset them (atomically, so only one
+ * caller gets them). Returns "wait" if posters arrived too recently, null if there's nothing to report.
+ */
+export async function takeBatchTotals(): Promise<BatchTotals | "wait" | null> {
+  const rows = (await sql()`
+    with old as (select * from bot_state where id = 1 for update)
+    update bot_state b set batch_added = 0, batch_needs_date = 0, batch_existing = 0, batch_not_poster = 0, batch_failed = 0
+    from old
+    where b.id = 1
+      and old.batch_added + old.batch_needs_date + old.batch_existing + old.batch_not_poster + old.batch_failed > 0
+      and (old.last_activity_at is null or old.last_activity_at < now() - make_interval(secs => ${QUIET_SECONDS}))
+    returning old.batch_chat_id as chat_id, old.batch_added as added, old.batch_needs_date as needs_date,
+              old.batch_existing as existing, old.batch_not_poster as not_poster, old.batch_failed as failed`) as BatchTotals[];
+  if (rows[0]) return rows[0];
+  const pending = (await sql()`
+    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_failed as n from bot_state where id = 1`) as { n: number }[];
+  return (pending[0]?.n ?? 0) > 0 ? "wait" : null;
+}
+
 /** Gemini said "too many requests" or "overloaded", or every model timed out. */
 export function isRateLimit(err: unknown): boolean {
   return /429|quota|RESOURCE_EXHAUSTED|503|UNAVAILABLE|overloaded|high demand|aborted|AbortError/i.test(String(err));
@@ -101,6 +161,8 @@ type Handlers = {
   giveUp: (job: PosterJob, err: unknown) => Promise<void>;
   /** Start a fresh function call to carry on (Vercel stops each call after maxDuration). */
   handOver: () => Promise<void>;
+  /** Called when the queue is empty. Return true when finished, false to check again shortly. */
+  onIdle: () => Promise<boolean>;
 };
 
 /**
@@ -110,23 +172,30 @@ type Handlers = {
 export async function runWorker(h: Handlers): Promise<void> {
   if (!(await acquireLease())) return;
   const started = Date.now();
-  let lastCall = 0;
+  const elapsed = () => Date.now() - started;
+  let nextCallAt = 0; // earliest time the next Gemini call may start
   try {
-    while (Date.now() - started < WORKER_BUDGET_MS - SPACING_MS) {
+    while (elapsed() < WORKER_BUDGET_MS) {
       const job = await nextJob();
       if (!job) {
-        // Nothing ready: stop if the queue is empty, otherwise wait for the next retry
-        // (up to the end of this run's budget, after which we hand over).
         const wake = await nextWakeSeconds();
-        if (wake == null) break;
-        const remaining = WORKER_BUDGET_MS - SPACING_MS - (Date.now() - started);
-        await sleep(Math.max(Math.min(wake * 1000, remaining), 1000));
+        if (wake == null) {
+          // Queue empty: wait for the batch to go quiet, then let the caller sum it up.
+          if (await h.onIdle()) break;
+          await sleep(3000);
+        } else {
+          // Only retries left: wait for the next one (a fresh call takes over if it's a while yet).
+          await sleep(Math.min(Math.max(wake * 1000, 1000), MAX_WAIT_MS));
+        }
         continue;
       }
 
-      const gap = SPACING_MS - (Date.now() - lastCall);
-      if (gap > 0) await sleep(gap);
-      lastCall = Date.now();
+      const wait = Math.min(nextCallAt - Date.now(), MAX_WAIT_MS);
+      if (wait > 0) {
+        if (elapsed() + wait >= WORKER_BUDGET_MS) break; // hand over rather than start late
+        await sleep(wait);
+      }
+      nextCallAt = Date.now() + SPACING_MS;
 
       try {
         await h.process(job);
@@ -139,7 +208,7 @@ export async function runWorker(h: Handlers): Promise<void> {
         } else {
           await retryLater(job.id, retryDelaySeconds(err, job.attempts));
           // Hitting the limit means the next poster would too: pause before carrying on.
-          if (isRateLimit(err)) lastCall = Date.now() + 20_000;
+          if (isRateLimit(err)) nextCallAt = Date.now() + 25_000;
         }
       }
     }
@@ -147,8 +216,14 @@ export async function runWorker(h: Handlers): Promise<void> {
     await releaseLease();
   }
 
-  // Posters left (or retries scheduled): hand over to a fresh call.
-  if ((await queueLength()) > 0) {
+  // Posters left, retries scheduled, or a summary still to send: hand over to a fresh call.
+  if ((await queueLength()) > 0 || (await takeBatchTotalsPeek())) {
     await h.handOver().catch((err) => console.error("queue hand-over failed", err));
   }
+}
+
+async function takeBatchTotalsPeek(): Promise<boolean> {
+  const rows = (await sql()`
+    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_failed as n from bot_state where id = 1`) as { n: number }[];
+  return (rows[0]?.n ?? 0) > 0;
 }

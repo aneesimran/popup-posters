@@ -3,7 +3,7 @@ import { handleUpdate } from "@/lib/bot";
 import { safeEqual } from "@/lib/auth";
 import type { TgUpdate } from "@/lib/telegram";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 export async function POST(req: Request) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";

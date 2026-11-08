@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatMiles, milesBetween, normalizePostcode } from "./geo";
-import { overlaps, whenRange } from "./filters";
+import { overlaps, whenLabel, whenRange } from "./filters";
 
 describe("normalizePostcode", () => {
   it("formats full and outward postcodes", () => {
@@ -40,6 +40,16 @@ describe("whenRange", () => {
   it("covers the rest of the month and the next 7 days", () => {
     expect(whenRange("month", "2026-11-08")).toEqual(["2026-11-08", "2026-11-30"]);
     expect(whenRange("week", "2026-11-28")).toEqual(["2026-11-28", "2026-12-04"]);
+  });
+  it("covers whole calendar months ahead, across the year end", () => {
+    expect(whenRange("m1", "2026-11-08")).toEqual(["2026-12-01", "2026-12-31"]);
+    expect(whenRange("m2", "2026-11-08")).toEqual(["2027-01-01", "2027-01-31"]);
+    expect(whenRange("m3", "2026-11-30")).toEqual(["2027-02-01", "2027-02-28"]);
+    expect(whenRange("m1", "2027-01-31")).toEqual(["2027-02-01", "2027-02-28"]);
+  });
+  it("labels months ahead by name", () => {
+    expect(["m1", "m2", "m3"].map((v) => whenLabel(v as "m1", "2026-11-08"))).toEqual(["December", "January", "February"]);
+    expect(whenLabel("week", "2026-11-08")).toBe("Next 7 days");
   });
   it("includes multi-day events that overlap the range", () => {
     const range: [string, string] = ["2026-11-14", "2026-11-15"];

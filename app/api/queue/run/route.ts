@@ -2,7 +2,7 @@ import { after } from "next/server";
 import { startWorker } from "@/lib/bot";
 import { safeEqual } from "@/lib/auth";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 /** Carries on reading queued posters in a fresh function call (called by the worker itself). */
 export async function POST(req: Request) {

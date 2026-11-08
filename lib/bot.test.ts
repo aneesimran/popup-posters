@@ -37,6 +37,7 @@ vi.mock("./geo", async (importOriginal) => ({
   locateEvent: async () => ({ lat: 51.5590, lng: 0.0741, source: "venue" }), // Ilford Town Hall
 }));
 // Queue stand-in: posters are read straight away, in order, like the real worker does.
+const outcomes: string[] = [];
 const jobs: Parameters<typeof import("./queue").enqueue>[0][] = [];
 vi.mock("./queue", () => ({
   enqueue: async (job: (typeof jobs)[number]) => {
@@ -46,8 +47,12 @@ vi.mock("./queue", () => ({
   },
   queueLength: async () => jobs.length,
   claimBatchNotice: async () => false,
-  runWorker: async (h: { process: (j: unknown) => Promise<void> }) => {
+  touchActivity: async () => {},
+  recordOutcome: async (_chat: number, o: string) => { outcomes.push(o); },
+  takeBatchTotals: async () => null,
+  runWorker: async (h: { process: (j: unknown) => Promise<void>; onIdle: () => Promise<boolean> }) => {
     while (jobs.length) await h.process(jobs.shift());
+    await h.onIdle();
   },
 }));
 vi.mock("./gemini", () => ({
@@ -80,6 +85,7 @@ const last = () => sent[sent.length - 1].text;
 beforeEach(() => {
   rows.length = 0;
   sent.length = 0;
+  outcomes.length = 0;
   process.env.ALLOWED_CHAT_ID = String(ME);
 });
 
@@ -99,6 +105,7 @@ describe("handleUpdate", () => {
     await handleUpdate(photo("meme"), ORIGIN);
     expect(rows).toHaveLength(0);
     expect(last()).toContain("Doesn't look like an event");
+    expect(outcomes).toEqual(["not_poster"]);
   });
 
   it("spots the same image and the same event in a different image", async () => {
@@ -110,12 +117,14 @@ describe("handleUpdate", () => {
     await handleUpdate(photo("b"), ORIGIN);
     expect(last()).toContain("Already have this one");
     expect(rows).toHaveLength(1);
+    expect(outcomes).toEqual(["added", "existing", "existing"]);
   });
 
   it("asks for a date, then fills it in from a reply", async () => {
     extraction = event({ start_date: null, start_time: null });
     await handleUpdate(photo("nodate"), ORIGIN);
     expect(rows[0].status).toBe("pending");
+    expect(outcomes).toEqual(["needs_date"]);
     expect(last()).toContain("Reply to this message with the date");
     await handleUpdate(text("next sat 2pm", rows[0].bot_msg_id!), ORIGIN);
     expect(rows[0]).toMatchObject({ status: "active", start_date: "2026-11-21", start_time: "14:00" });
@@ -141,5 +150,27 @@ describe("handleUpdate", () => {
     delete process.env.ALLOWED_CHAT_ID;
     await handleUpdate(text("/start"), ORIGIN);
     expect(last()).toContain(`<code>${ME}</code>`);
+  });
+});
+
+describe("batchSummary", async () => {
+  const { batchSummary } = await import("./bot");
+  it("sums up a batch, leaving out empty lines", () => {
+    const text = batchSummary({ chat_id: 1, added: 40, needs_date: 1, existing: 12, not_poster: 5, failed: 0 }, "https://x.app");
+    expect(text).toBe([
+      "<b>All done!</b> 58 posters checked:",
+      "✅ 41 added (1 needs a date: reply to its message)",
+      "🔁 12 were already saved",
+      "🚫 5 weren't event posters",
+      "",
+      "https://x.app",
+    ].join("\n"));
+  });
+  it("handles singulars", () => {
+    const text = batchSummary({ chat_id: 1, added: 0, needs_date: 0, existing: 1, not_poster: 1, failed: 1 }, "https://x.app");
+    expect(text).toContain("🔁 1 was already saved");
+    expect(text).toContain("🚫 1 wasn't an event poster");
+    expect(text).toContain("⚠️ 1 couldn't be read, send it again later");
+    expect(text).not.toContain("added");
   });
 });

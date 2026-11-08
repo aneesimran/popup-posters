@@ -50,3 +50,12 @@ create table if not exists bot_state (
   notice_at    timestamptz
 );
 insert into bot_state (id) values (1) on conflict (id) do nothing;
+
+-- Running totals for the current batch, sent as a summary once things go quiet
+alter table bot_state add column if not exists batch_chat_id bigint;
+alter table bot_state add column if not exists batch_added int not null default 0;
+alter table bot_state add column if not exists batch_needs_date int not null default 0;
+alter table bot_state add column if not exists batch_existing int not null default 0;
+alter table bot_state add column if not exists batch_not_poster int not null default 0;
+alter table bot_state add column if not exists batch_failed int not null default 0;
+alter table bot_state add column if not exists last_activity_at timestamptz;

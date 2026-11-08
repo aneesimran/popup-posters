@@ -3,7 +3,10 @@ import { addDays, formatDateRange, formatTime, todayLondon } from "./dates";
 import { dedupeKey } from "./dedupe";
 import { extractPoster, parseDateReply } from "./gemini";
 import { distanceFromHome, formatMiles, homePoint, locateEvent, type Point } from "./geo";
-import { claimBatchNotice, enqueue, queueLength, runWorker, type PosterJob } from "./queue";
+import {
+  claimBatchNotice, enqueue, queueLength, recordOutcome, runWorker, takeBatchTotals, touchActivity,
+  type BatchTotals, type Outcome, type PosterJob,
+} from "./queue";
 import { downloadFile, escapeHtml as h, sendMessage, sendTyping, type TgMessage, type TgUpdate } from "./telegram";
 import type { EventRow } from "./types";
 
@@ -65,9 +68,10 @@ export async function handleUpdate(update: TgUpdate, origin: string): Promise<vo
   try {
     const file = posterFile(msg);
     if (file) return await queuePoster(msg, file, origin);
-    if (msg.reply_to_message && text) return await handleReply(msg, text);
-    if (text.startsWith("/list")) return await handleList(chatId);
-    await sendMessage(chatId, HELP);
+    if (msg.reply_to_message && text) await handleReply(msg, text);
+    else if (text.startsWith("/list")) await handleList(chatId);
+    else await sendMessage(chatId, HELP);
+    await startWorker(origin); // also restarts the poster queue if it ever stalled
   } catch (err) {
     console.error("bot error", err);
     const quota = /429|quota|RESOURCE_EXHAUSTED/i.test(String(err));
@@ -87,6 +91,8 @@ async function queuePoster(msg: TgMessage, file: { fileId: string; uniqueId: str
   const same = await db.findByFileUniqueId(file.uniqueId);
   if (same) {
     await sendMessage(chatId, `Already have this one:\n${summary(same)}`, msg.message_id);
+    await recordOutcome(chatId, "existing");
+    await startWorker(origin); // sends the end-of-batch summary once things go quiet
     return;
   }
 
@@ -98,6 +104,7 @@ async function queuePoster(msg: TgMessage, file: { fileId: string; uniqueId: str
     file_unique_id: file.uniqueId,
     caption: msg.caption ?? null,
   });
+  await touchActivity();
   if (added && (await queueLength()) >= BATCH_NOTICE_AT && (await claimBatchNotice())) {
     await sendMessage(chatId, "Got a batch! I'll read them one at a time (about 8 a minute) so I stay within the free limit. Replies will trickle in.");
   }
@@ -107,9 +114,19 @@ async function queuePoster(msg: TgMessage, file: { fileId: string; uniqueId: str
 /** Read queued posters. Only one worker runs at a time; extra calls return straight away. */
 export async function startWorker(origin: string): Promise<void> {
   await runWorker({
-    process: processPoster,
+    process: async (job) => {
+      const outcome = await processPoster(job);
+      await recordOutcome(job.chat_id, outcome);
+    },
     giveUp: async (job) => {
+      await recordOutcome(job.chat_id, "failed");
       await sendMessage(job.chat_id, "Sorry, I couldn't read this poster after several tries. Send it again later.", job.message_id);
+    },
+    onIdle: async () => {
+      const totals = await takeBatchTotals();
+      if (totals === "wait") return false;
+      if (totals?.chat_id && batchSize(totals) >= 2) await sendMessage(totals.chat_id, batchSummary(totals, origin));
+      return true;
     },
     handOver: async () => {
       await fetch(`${origin}/api/queue/run`, {
@@ -121,8 +138,28 @@ export async function startWorker(origin: string): Promise<void> {
   });
 }
 
+const batchSize = (t: BatchTotals) => t.added + t.needs_date + t.existing + t.not_poster + t.failed;
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** "All done! 59 posters checked: 41 added, …" */
+export function batchSummary(t: BatchTotals, origin: string): string {
+  const added = t.added + t.needs_date;
+  const lines = [
+    `<b>All done!</b> ${plural(batchSize(t), "poster", "posters")} checked:`,
+    added ? `✅ ${added} added${t.needs_date ? ` (${t.needs_date} need${t.needs_date === 1 ? "s" : ""} a date: reply to ${t.needs_date === 1 ? "its message" : "their messages"})` : ""}` : "",
+    t.existing ? `🔁 ${plural(t.existing, "was already saved", "were already saved")}` : "",
+    t.not_poster ? `🚫 ${plural(t.not_poster, "wasn't an event poster", "weren't event posters")}` : "",
+    t.failed ? `⚠️ ${plural(t.failed, "couldn't be read", "couldn't be read")}, send ${t.failed === 1 ? "it" : "them"} again later` : "",
+    "",
+    origin,
+  ];
+  return lines.filter((l, i) => l || i === lines.length - 2).join("\n");
+}
+
 /** Read one poster and save it. Throws on Gemini/network errors so the queue can retry. */
-export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id" | "file_id" | "thumb_file_id" | "file_unique_id" | "caption">) {
+export async function processPoster(
+  job: Pick<PosterJob, "chat_id" | "message_id" | "file_id" | "thumb_file_id" | "file_unique_id" | "caption">,
+): Promise<Outcome> {
   const chatId = job.chat_id;
   const file = { fileId: job.file_id, uniqueId: job.file_unique_id, thumbId: job.thumb_file_id ?? job.file_id };
   const msg = { message_id: job.message_id };
@@ -133,7 +170,7 @@ export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id
 
   if (!x.is_event || !x.title) {
     await sendMessage(chatId, "Doesn't look like an event poster, so I skipped it.", msg.message_id);
-    return;
+    return "not_poster";
   }
 
   const key = dedupeKey(x.title, x.start_date);
@@ -141,7 +178,7 @@ export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id
     const dup = await db.findByDedupeKey(key);
     if (dup) {
       await sendMessage(chatId, `Already have this one:\n${summary(dup)}`, msg.message_id);
-      return;
+      return "existing";
     }
   }
 
@@ -172,7 +209,7 @@ export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id
   if (!row) {
     // Lost a race with an identical poster sent at the same moment.
     await sendMessage(chatId, "Already have this one.", msg.message_id);
-    return;
+    return "existing";
   }
 
   const reply = row.status === "pending"
@@ -180,6 +217,7 @@ export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id
     : `Added:\n${summary(row, home)}`;
   const sent = await sendMessage(chatId, reply, msg.message_id);
   await db.setBotMessage(row.id, sent.message_id);
+  return row.status === "pending" ? "needs_date" : "added";
 }
 
 async function handleReply(msg: TgMessage, text: string) {

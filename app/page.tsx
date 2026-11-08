@@ -1,12 +1,16 @@
 import Link from "next/link";
+import { headers } from "next/headers";
+import { after } from "next/server";
+import { startWorker } from "@/lib/bot";
 import EventCard from "./components/EventCard";
 import * as db from "@/lib/db";
 import { dayLabel, todayLondon } from "@/lib/dates";
-import { WHEN_OPTIONS, WITHIN_OPTIONS, overlaps, parseWhen, parseWithin, whenRange } from "@/lib/filters";
+import { WHEN_OPTIONS, WITHIN_OPTIONS, overlaps, parseWhen, parseWithin, whenLabel, whenRange } from "@/lib/filters";
 import { distanceFromHome, homePoint } from "@/lib/geo";
 import type { EventRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type Params = { area?: string; past?: string; when?: string; within?: string; sort?: string };
 type Item = { e: EventRow; miles: number | null };
@@ -45,6 +49,10 @@ const Grid = ({ children }: { children: React.ReactNode }) => (
 
 export default async function Home({ searchParams }: { searchParams: Promise<Params> }) {
   const params = await searchParams;
+  // Opening the page also restarts the poster queue if it ever stalled (a no-op otherwise).
+  const h = await headers();
+  const origin = `${h.get("x-forwarded-proto") ?? "https"}://${h.get("host")}`;
+  after(() => startWorker(origin).catch((err) => console.error("queue kick failed", err)));
   const showPast = params.past === "1";
   const when = showPast ? null : parseWhen(params.when);
   const within = parseWithin(params.within);
@@ -100,7 +108,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
           <ChipRow>
             <Chip label="Any time" active={!when} href={href({ when: undefined })} />
             {WHEN_OPTIONS.map((o) => (
-              <Chip key={o.value} label={o.label} active={when === o.value} href={href({ when: o.value })} />
+              <Chip key={o.value} label={whenLabel(o.value, today)} active={when === o.value} href={href({ when: o.value })} />
             ))}
           </ChipRow>
         )}
