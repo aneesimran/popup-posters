@@ -10,6 +10,7 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
 - The bot replies with what it read, e.g. *Added: Winter Night Market, Sat 14 Nov, 6pm, Ilford*.
 - No date on the poster? The bot asks. **Reply to its message** with something like `Sat 14 Nov 6pm` or `next Saturday`.
 - Reply `/delete` to a bot message to remove that event. `/list` shows the next 7 days.
+- You can share lots at once: posters are queued and read one at a time (about 8 a minute) to stay within Gemini's free limit, so replies trickle in. If the limit is hit, the poster waits and is retried automatically.
 - Memes and non-event images are skipped. The same poster sent twice is only stored once.
 - Each event shows how far it is from home (straight-line miles), found from the poster's postcode, venue or area.
 - The web page groups events by day and filters by date (today, this weekend, next 7 days, this month), distance (within 1/3/5/10 miles, or nearest first) and area. Past events are hidden. You can edit, delete or add an event to your calendar.

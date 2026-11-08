@@ -3,6 +3,7 @@ import { addDays, formatDateRange, formatTime, todayLondon } from "./dates";
 import { dedupeKey } from "./dedupe";
 import { extractPoster, parseDateReply } from "./gemini";
 import { distanceFromHome, formatMiles, homePoint, locateEvent, type Point } from "./geo";
+import { claimBatchNotice, enqueue, queueLength, runWorker, type PosterJob } from "./queue";
 import { downloadFile, escapeHtml as h, sendMessage, sendTyping, type TgMessage, type TgUpdate } from "./telegram";
 import type { EventRow } from "./types";
 
@@ -46,7 +47,8 @@ function posterFile(msg: TgMessage) {
   return null;
 }
 
-export async function handleUpdate(update: TgUpdate): Promise<void> {
+/** `origin` is this app's URL, used to hand queue work over to a fresh function call. */
+export async function handleUpdate(update: TgUpdate, origin: string): Promise<void> {
   const msg = update.message;
   if (!msg) return;
   const chatId = msg.chat.id;
@@ -62,7 +64,7 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 
   try {
     const file = posterFile(msg);
-    if (file) return await handlePoster(msg, file);
+    if (file) return await queuePoster(msg, file, origin);
     if (msg.reply_to_message && text) return await handleReply(msg, text);
     if (text.startsWith("/list")) return await handleList(chatId);
     await sendMessage(chatId, HELP);
@@ -71,23 +73,63 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
     const quota = /429|quota|RESOURCE_EXHAUSTED/i.test(String(err));
     await sendMessage(
       chatId,
-      quota ? "Gemini's free limit is used up for now. Send it again in a bit." : "Something went wrong reading that. Try sending it again.",
+      quota ? "Gemini's free limit is used up for now. Try again in a minute." : "Something went wrong with that. Try sending it again.",
       msg.message_id,
     ).catch(() => {});
   }
 }
 
-async function handlePoster(msg: TgMessage, file: { fileId: string; uniqueId: string; thumbId: string }) {
+const BATCH_NOTICE_AT = 5;
+
+async function queuePoster(msg: TgMessage, file: { fileId: string; uniqueId: string; thumbId: string }, origin: string) {
   const chatId = msg.chat.id;
+  // Exact same image as a saved event: answer straight away, no need to read it again.
   const same = await db.findByFileUniqueId(file.uniqueId);
   if (same) {
     await sendMessage(chatId, `Already have this one:\n${summary(same)}`, msg.message_id);
     return;
   }
 
+  const added = await enqueue({
+    chat_id: chatId,
+    message_id: msg.message_id,
+    file_id: file.fileId,
+    thumb_file_id: file.thumbId,
+    file_unique_id: file.uniqueId,
+    caption: msg.caption ?? null,
+  });
+  if (added && (await queueLength()) >= BATCH_NOTICE_AT && (await claimBatchNotice())) {
+    await sendMessage(chatId, "Got a batch! I'll read them one at a time (about 8 a minute) so I stay within the free limit. Replies will trickle in.");
+  }
+  await startWorker(origin);
+}
+
+/** Read queued posters. Only one worker runs at a time; extra calls return straight away. */
+export async function startWorker(origin: string): Promise<void> {
+  await runWorker({
+    process: processPoster,
+    giveUp: async (job) => {
+      await sendMessage(job.chat_id, "Sorry, I couldn't read this poster after several tries. Send it again later.", job.message_id);
+    },
+    handOver: async () => {
+      await fetch(`${origin}/api/queue/run`, {
+        method: "POST",
+        headers: { "x-queue-secret": process.env.TELEGRAM_WEBHOOK_SECRET ?? "" },
+        signal: AbortSignal.timeout(10_000),
+      });
+    },
+  });
+}
+
+/** Read one poster and save it. Throws on Gemini/network errors so the queue can retry. */
+export async function processPoster(job: Pick<PosterJob, "chat_id" | "message_id" | "file_id" | "thumb_file_id" | "file_unique_id" | "caption">) {
+  const chatId = job.chat_id;
+  const file = { fileId: job.file_id, uniqueId: job.file_unique_id, thumbId: job.thumb_file_id ?? job.file_id };
+  const msg = { message_id: job.message_id };
+
   await sendTyping(chatId);
   const { bytes, mimeType } = await downloadFile(file.fileId);
-  const x = await extractPoster(bytes, mimeType, msg.caption);
+  const x = await extractPoster(bytes, mimeType, job.caption ?? undefined);
 
   if (!x.is_event || !x.title) {
     await sendMessage(chatId, "Doesn't look like an event poster, so I skipped it.", msg.message_id);

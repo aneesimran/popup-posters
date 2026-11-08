@@ -18,6 +18,6 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  // Everything except the login page, the Telegram webhook and static assets.
-  matcher: ["/((?!login|api/telegram|_next/static|_next/image|favicon.ico|icon.svg).*)"],
+  // Everything except the login page, the Telegram webhook, the queue hand-over and static assets.
+  matcher: ["/((?!login|api/telegram|api/queue|_next/static|_next/image|favicon.ico|icon.svg).*)"],
 };

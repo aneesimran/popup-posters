@@ -12,6 +12,7 @@ export async function POST(req: Request) {
 
   const update = (await req.json()) as TgUpdate;
   // Answer Telegram straight away so it doesn't retry; read the poster afterwards.
-  after(() => handleUpdate(update));
+  const origin = new URL(req.url).origin;
+  after(() => handleUpdate(update, origin));
   return new Response("ok");
 }

@@ -28,3 +28,25 @@ alter table events add column if not exists postcode text;
 alter table events add column if not exists lat double precision;
 alter table events add column if not exists lng double precision;
 alter table events add column if not exists geo_source text;  -- postcode | venue | area
+
+-- Posters waiting to be read. One worker reads them in order, paced under Gemini's per-minute limit.
+create table if not exists poster_jobs (
+  id              serial primary key,
+  chat_id         bigint not null,
+  message_id      bigint not null,
+  file_id         text not null,
+  thumb_file_id   text,
+  file_unique_id  text not null unique,
+  caption         text,
+  attempts        int not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  created_at      timestamptz not null default now()
+);
+
+-- Single-row state: who holds the worker lease, and when we last told the user about a batch.
+create table if not exists bot_state (
+  id           int primary key,
+  worker_until timestamptz,
+  notice_at    timestamptz
+);
+insert into bot_state (id) values (1) on conflict (id) do nothing;

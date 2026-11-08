@@ -36,6 +36,20 @@ vi.mock("./geo", async (importOriginal) => ({
   homePoint: async () => ({ lat: 51.5416, lng: -0.0033 }), // Stratford station
   locateEvent: async () => ({ lat: 51.5590, lng: 0.0741, source: "venue" }), // Ilford Town Hall
 }));
+// Queue stand-in: posters are read straight away, in order, like the real worker does.
+const jobs: Parameters<typeof import("./queue").enqueue>[0][] = [];
+vi.mock("./queue", () => ({
+  enqueue: async (job: (typeof jobs)[number]) => {
+    if (jobs.some((j) => j.file_unique_id === job.file_unique_id)) return false;
+    jobs.push(job);
+    return true;
+  },
+  queueLength: async () => jobs.length,
+  claimBatchNotice: async () => false,
+  runWorker: async (h: { process: (j: unknown) => Promise<void> }) => {
+    while (jobs.length) await h.process(jobs.shift());
+  },
+}));
 vi.mock("./gemini", () => ({
   extractPoster: async () => extraction,
   parseDateReply: async () => dateReply,
@@ -44,6 +58,7 @@ vi.mock("./gemini", () => ({
 const { handleUpdate } = await import("./bot");
 
 const ME = 42;
+const ORIGIN = "http://test";
 let nextId = 1;
 const photo = (uid: string) => ({
   update_id: nextId,
@@ -71,7 +86,7 @@ beforeEach(() => {
 describe("handleUpdate", () => {
   it("adds a poster and confirms it", async () => {
     extraction = event();
-    await handleUpdate(photo("a"));
+    await handleUpdate(photo("a"), ORIGIN);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ status: "active", area: "Ilford", bot_msg_id: 1001, geo_source: "venue" });
     expect(last()).toContain("Added:");
@@ -81,36 +96,36 @@ describe("handleUpdate", () => {
 
   it("skips non-events", async () => {
     extraction = event({ is_event: false });
-    await handleUpdate(photo("meme"));
+    await handleUpdate(photo("meme"), ORIGIN);
     expect(rows).toHaveLength(0);
     expect(last()).toContain("Doesn't look like an event");
   });
 
   it("spots the same image and the same event in a different image", async () => {
     extraction = event();
-    await handleUpdate(photo("a"));
-    await handleUpdate(photo("a"));
+    await handleUpdate(photo("a"), ORIGIN);
+    await handleUpdate(photo("a"), ORIGIN);
     expect(last()).toContain("Already have this one");
     extraction = event({ title: "WINTER NIGHT MARKET!" });
-    await handleUpdate(photo("b"));
+    await handleUpdate(photo("b"), ORIGIN);
     expect(last()).toContain("Already have this one");
     expect(rows).toHaveLength(1);
   });
 
   it("asks for a date, then fills it in from a reply", async () => {
     extraction = event({ start_date: null, start_time: null });
-    await handleUpdate(photo("nodate"));
+    await handleUpdate(photo("nodate"), ORIGIN);
     expect(rows[0].status).toBe("pending");
     expect(last()).toContain("Reply to this message with the date");
-    await handleUpdate(text("next sat 2pm", rows[0].bot_msg_id!));
+    await handleUpdate(text("next sat 2pm", rows[0].bot_msg_id!), ORIGIN);
     expect(rows[0]).toMatchObject({ status: "active", start_date: "2026-11-21", start_time: "14:00" });
     expect(last()).toContain("Updated:");
   });
 
   it("deletes an event when you reply /delete", async () => {
     extraction = event();
-    await handleUpdate(photo("a"));
-    await handleUpdate(text("/delete", rows[0].bot_msg_id!));
+    await handleUpdate(photo("a"), ORIGIN);
+    await handleUpdate(text("/delete", rows[0].bot_msg_id!), ORIGIN);
     expect(rows).toHaveLength(0);
     expect(last()).toContain("Deleted");
   });
@@ -119,12 +134,12 @@ describe("handleUpdate", () => {
     extraction = event();
     const stranger = photo("x");
     stranger.message.chat.id = 7;
-    await handleUpdate(stranger);
+    await handleUpdate(stranger, ORIGIN);
     expect(rows).toHaveLength(0);
     expect(sent).toHaveLength(0);
 
     delete process.env.ALLOWED_CHAT_ID;
-    await handleUpdate(text("/start"));
+    await handleUpdate(text("/start"), ORIGIN);
     expect(last()).toContain(`<code>${ME}</code>`);
   });
 });
