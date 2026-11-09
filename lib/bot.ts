@@ -202,6 +202,7 @@ export async function processPoster(
     status: x.start_date ? "active" : "pending",
     dedupe_key: key,
     postcode: x.postcode,
+    region: x.region,
     lat: geo?.lat ?? null,
     lng: geo?.lng ?? null,
     geo_source: geo?.source ?? null,

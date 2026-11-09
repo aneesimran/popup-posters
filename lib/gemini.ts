@@ -66,10 +66,14 @@ const posterSchema = {
       description: "Town or neighbourhood only, e.g. 'Ilford', 'Stratford', 'New Cross', 'Leicester'. If not printed, infer it from the venue, street or postcode when you are confident.",
     },
     postcode: { ...nullableString, description: "UK postcode exactly as printed on the poster, else null. Never invent one." },
+    region: {
+      ...nullableString,
+      description: "The city or county the area is in, to tell apart places with the same name, e.g. 'London' for Tower Hamlets or Wembley, 'Birmingham' for Aston, 'Kent' for Dover. Use the poster's clues; null if unsure.",
+    },
     price: { ...nullableString, description: "e.g. 'Free', '£5', '£10–£15'" },
     description: { ...nullableString, description: "One short sentence on what the event is" },
   },
-  required: ["is_event", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "postcode", "price", "description"],
+  required: ["is_event", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "postcode", "region", "price", "description"],
 };
 
 const dateSchema = {
@@ -115,4 +119,25 @@ export async function parseDateReply(text: string, eventTitle: string): Promise<
   ].join("\n");
 
   return normalizeDateReply(await generateJson(prompt, dateSchema));
+}
+
+/** For events saved before `region` existed: one text-only request that names each event's city or county. */
+export async function guessRegions(
+  items: { id: number; title: string; venue: string | null; area: string | null; postcode: string | null }[],
+): Promise<Map<number, string>> {
+  if (!items.length) return new Map();
+  const prompt = [
+    "For each UK event below, give the city or county its area is in, to tell apart places with the same name",
+    "(e.g. 'London' for Tower Hamlets or Wembley, 'Birmingham' for Aston). Use the title and venue as clues. Use null if unsure.",
+    JSON.stringify(items),
+  ].join("\n");
+  const json = (await generateJson(prompt, {
+    type: "array",
+    items: {
+      type: "object",
+      properties: { id: { type: "integer" }, region: { type: ["string", "null"] } },
+      required: ["id", "region"],
+    },
+  })) as { id: number; region: string | null }[];
+  return new Map(json.filter((r) => typeof r.region === "string" && r.region.trim()).map((r) => [r.id, r.region!.trim()]));
 }

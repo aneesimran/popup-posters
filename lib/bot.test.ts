@@ -78,7 +78,7 @@ const text = (t: string, replyTo?: number) => ({
 });
 const event = (over: Partial<Extraction> = {}): Extraction => ({
   is_event: true, title: "Winter Night Market", start_date: "2026-11-14", end_date: null, start_time: "18:00",
-  end_time: null, venue: "Ilford Town Hall", area: "Ilford", price: "Free", description: null, postcode: null, ...over,
+  end_time: null, venue: "Ilford Town Hall", area: "Ilford", price: "Free", description: null, postcode: null, region: "London", ...over,
 });
 const last = () => sent[sent.length - 1].text;
 

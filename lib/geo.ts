@@ -61,22 +61,38 @@ export async function lookupPostcode(postcode: string): Promise<Point | null> {
 const nearest = <T extends Point>(points: T[], to: Point | null): T | null =>
   points.length === 0 ? null : to ? points.reduce((a, b) => (milesBetween(a, to) <= milesBetween(b, to) ? a : b)) : points[0];
 
-/** A town/neighbourhood name. Names repeat across the UK, so prefer the one nearest home. */
-export async function lookupArea(area: string, home: Point | null): Promise<Point | null> {
+/**
+ * A town, neighbourhood or borough. Names repeat across the UK ("Tower Hamlets" is also a part
+ * of Dover), so gather candidates from postcodes.io place names and OpenStreetMap (which also
+ * knows boroughs) and take the one nearest home.
+ */
+export async function lookupArea(area: string, region: string | null, home: Point | null): Promise<Point | null> {
+  // With a city/county to go on, search for exactly that ("Tower Hamlets, London").
+  if (region && !area.toLowerCase().includes(region.toLowerCase())) {
+    const inRegion = await searchOsm(`${area}, ${region}`);
+    if (inRegion.length) return nearest(inRegion, home);
+  }
   const json = (await getJson(`https://api.postcodes.io/places?q=${encodeURIComponent(area)}&limit=20`)) as {
     result?: { name_1?: string; latitude: number; longitude: number }[] | null;
   } | null;
   const wanted = area.trim().toLowerCase();
-  const exact = (json?.result ?? [])
+  const places = (json?.result ?? [])
     .filter((p) => p.name_1?.toLowerCase() === wanted)
     .map((p) => ({ lat: p.latitude, lng: p.longitude }));
-  const found = nearest(exact, home);
-  if (found) return found;
   const osm = await searchOsm(area);
-  return nearest(osm, home);
+  return nearest([...places, ...osm], home);
+}
+
+// OpenStreetMap's free service allows about one request a second.
+let lastOsmCall = 0;
+async function osmTurn() {
+  const wait = lastOsmCall + 1100 - Date.now();
+  lastOsmCall = Math.max(Date.now(), lastOsmCall + 1100);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
 }
 
 async function searchOsm(query: string): Promise<Point[]> {
+  await osmTurn();
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&countrycodes=gb&format=jsonv2&limit=5`;
   const json = (await getJson(url)) as { lat: string; lon: string }[] | null;
   return (json ?? []).map((r) => ({ lat: Number(r.lat), lng: Number(r.lon) })).filter((p) => Number.isFinite(p.lat));
@@ -90,16 +106,22 @@ const MAX_VENUE_FROM_AREA_MILES = 4;
  * then the centre of the area.
  */
 export async function locateEvent(
-  e: { postcode: string | null; venue: string | null; area: string | null },
+  e: { postcode: string | null; venue: string | null; area: string | null; region?: string | null },
   home: Point | null,
 ): Promise<GeoResult | null> {
   if (e.postcode) {
     const p = await lookupPostcode(e.postcode);
     if (p) return { ...p, source: "postcode" };
   }
-  const areaPoint = e.area ? await lookupArea(e.area, home) : null;
+  const region = e.region ?? null;
+  const areaPoint = e.area ? await lookupArea(e.area, region, home) : region ? await lookupArea(region, null, home) : null;
   if (e.venue) {
-    const query = e.area && !e.venue.toLowerCase().includes(e.area.toLowerCase()) ? `${e.venue}, ${e.area}` : e.venue;
+    // "The Town Hall, Tower Hamlets, London": add the area and region unless the venue already names them.
+    const parts = [e.venue];
+    for (const extra of [e.area, region]) {
+      if (extra && !parts.join(" ").toLowerCase().includes(extra.toLowerCase())) parts.push(extra);
+    }
+    const query = parts.join(", ");
     const candidates = await searchOsm(query);
     const anchor = areaPoint ?? home;
     const best = nearest(candidates, anchor);

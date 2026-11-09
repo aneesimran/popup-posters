@@ -17,6 +17,7 @@ export type EventRow = {
   status: "active" | "pending";
   dedupe_key: string | null;
   postcode: string | null;
+  region: string | null;
   lat: number | null;
   lng: number | null;
   geo_source: "postcode" | "venue" | "area" | null;
@@ -35,6 +36,7 @@ export type Extraction = {
   price: string | null;
   description: string | null;
   postcode: string | null;
+  region: string | null;
 };
 
 export type DateReply = {

@@ -31,6 +31,7 @@ export function normalizeExtraction(input: unknown): Extraction {
     price: str(raw.price, 60),
     description: str(raw.description, 400),
     postcode: normalizePostcode(raw.postcode),
+    region: str(raw.region, 60),
   };
 }
 

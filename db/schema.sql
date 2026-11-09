@@ -59,3 +59,7 @@ alter table bot_state add column if not exists batch_existing int not null defau
 alter table bot_state add column if not exists batch_not_poster int not null default 0;
 alter table bot_state add column if not exists batch_failed int not null default 0;
 alter table bot_state add column if not exists last_activity_at timestamptz;
+
+-- City or county the area is in ("London", "Birmingham", "Kent"), so place names that repeat
+-- across the UK (Tower Hamlets, Aston, Milton…) are looked up in the right place.
+alter table events add column if not exists region text;

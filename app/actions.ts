@@ -55,11 +55,15 @@ export async function saveEvent(id: number, _prev: string | null, form: FormData
   if (rawPostcode && !postcode) return "Postcode looks wrong.";
   const venue = text(form, "venue");
   const area = text(form, "area");
+  const region = text(form, "region");
 
   // Only look the location up again if something about it changed.
   let geo = { lat: existing.lat, lng: existing.lng, geo_source: existing.geo_source };
-  if (venue !== existing.venue || area !== existing.area || postcode !== existing.postcode || existing.lat == null) {
-    const found = await locateEvent({ postcode, venue, area }, await homePoint()).catch(() => null);
+  if (
+    venue !== existing.venue || area !== existing.area || region !== existing.region ||
+    postcode !== existing.postcode || existing.lat == null
+  ) {
+    const found = await locateEvent({ postcode, venue, area, region }, await homePoint()).catch(() => null);
     geo = { lat: found?.lat ?? null, lng: found?.lng ?? null, geo_source: found?.source ?? null };
   }
 
@@ -71,6 +75,7 @@ export async function saveEvent(id: number, _prev: string | null, form: FormData
     end_time: start_time ? end_time : null,
     venue,
     area,
+    region,
     postcode,
     ...geo,
     price: text(form, "price"),
