@@ -4,7 +4,7 @@ import { after } from "next/server";
 import { startWorker } from "@/lib/bot";
 import EventCard from "./components/EventCard";
 import * as db from "@/lib/db";
-import { dayLabel, todayLondon } from "@/lib/dates";
+import { addDays, dayLabel, formatDay, todayLondon } from "@/lib/dates";
 import { WHEN_OPTIONS, WITHIN_OPTIONS, overlaps, parseWhen, parseWithin, whenLabel, whenRange } from "@/lib/filters";
 import { distanceFromHome, homePoint } from "@/lib/geo";
 import type { EventRow } from "@/lib/types";
@@ -16,6 +16,22 @@ type Params = { area?: string; past?: string; when?: string; within?: string; so
 type Item = { e: EventRow; miles: number | null };
 
 const areaKey = (a: string | null) => a?.trim().toLowerCase() ?? "";
+
+/** Group by the London day each event was added, newest first. */
+function groupByAdded(items: Item[]) {
+  const groups = new Map<string, Item[]>();
+  for (const item of items) {
+    const day = todayLondon(new Date(item.e.created_at));
+    groups.set(day, [...(groups.get(day) ?? []), item]);
+  }
+  return [...groups.entries()];
+}
+
+function addedLabel(day: string, today: string): string {
+  if (day === today) return "Added today";
+  if (day === addDays(today, -1)) return "Added yesterday";
+  return `Added ${formatDay(day)}`;
+}
 
 function groupByDay(items: Item[], today: string) {
   const groups = new Map<string, Item[]>();
@@ -57,6 +73,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
   const when = showPast ? null : parseWhen(params.when);
   const within = parseWithin(params.within);
   const nearestFirst = params.sort === "near";
+  const newestFirst = params.sort === "new";
   const today = todayLondon();
 
   const [events, pending, home] = await Promise.all([
@@ -82,6 +99,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
   const unlocated = within ? shown.filter((i) => i.miles == null).length : 0;
   if (within) shown = shown.filter((i) => i.miles != null && i.miles <= within);
   if (nearestFirst) shown = [...shown].sort((a, b) => (a.miles ?? Infinity) - (b.miles ?? Infinity));
+  if (newestFirst) shown = [...shown].sort((a, b) => new Date(b.e.created_at).getTime() - new Date(a.e.created_at).getTime());
 
   const href = (change: Partial<Params>) => {
     const next = { ...params, ...change };
@@ -106,6 +124,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
       <nav className="mb-6 space-y-2">
         {!showPast && (
           <ChipRow>
+            <Chip
+              label={newestFirst ? "Recently added ✓" : "Recently added"}
+              active={newestFirst}
+              href={href({ sort: newestFirst ? undefined : "new" })}
+            />
             <Chip label="Any time" active={!when} href={href({ when: undefined })} />
             {WHEN_OPTIONS.map((o) => (
               <Chip key={o.value} label={whenLabel(o.value, today)} active={when === o.value} href={href({ when: o.value })} />
@@ -151,6 +174,13 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
               ? "No past events yet."
               : "No upcoming events. Share a poster to your Telegram bot to add one."}
         </p>
+      ) : newestFirst ? (
+        groupByAdded(shown).map(([day, items]) => (
+          <section key={day} className="mb-8">
+            <h2 className="sticky top-0 z-10 -mx-4 mb-3 bg-bg/90 px-4 py-2 text-lg font-semibold backdrop-blur">{addedLabel(day, today)}</h2>
+            <Grid>{items.map(({ e, miles }) => <EventCard key={e.id} e={e} miles={miles} showDate />)}</Grid>
+          </section>
+        ))
       ) : showPast || nearestFirst ? (
         <Grid>{shown.map(({ e, miles }) => <EventCard key={e.id} e={e} miles={miles} showDate />)}</Grid>
       ) : (
