@@ -3,19 +3,17 @@ import { headers } from "next/headers";
 import { after } from "next/server";
 import { startWorker } from "@/lib/bot";
 import EventCard from "./components/EventCard";
-import * as db from "@/lib/db";
+import { listEvents, type ListItem, type ListParams } from "@/lib/listing";
 import { addDays, dayLabel, formatDay, todayLondon } from "@/lib/dates";
-import { WHEN_OPTIONS, WITHIN_OPTIONS, overlaps, parseWhen, parseWithin, whenLabel, whenRange } from "@/lib/filters";
+import { WHEN_OPTIONS, WITHIN_OPTIONS, whenLabel } from "@/lib/filters";
 import { distanceFromHome, homePoint } from "@/lib/geo";
 import type { EventRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-type Params = { area?: string; past?: string; when?: string; within?: string; sort?: string };
-type Item = { e: EventRow; miles: number | null };
-
-const areaKey = (a: string | null) => a?.trim().toLowerCase() ?? "";
+type Params = ListParams;
+type Item = ListItem;
 
 /** Group by the London day each event was added, newest first. */
 function groupByAdded(items: Item[]) {
@@ -69,37 +67,15 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
   const h = await headers();
   const origin = `${h.get("x-forwarded-proto") ?? "https"}://${h.get("host")}`;
   after(() => startWorker(origin).catch((err) => console.error("queue kick failed", err)));
-  const showPast = params.past === "1";
-  const when = showPast ? null : parseWhen(params.when);
-  const within = parseWithin(params.within);
-  const nearestFirst = params.sort === "near";
-  const newestFirst = params.sort === "new";
   const today = todayLondon();
-
-  const [events, pending, home] = await Promise.all([
-    showPast ? db.pastEvents(today) : db.upcomingEvents(today),
-    showPast ? Promise.resolve([]) : db.pendingEvents(),
-    homePoint(),
-  ]);
-
-  const withMiles = (e: EventRow): Item => ({ e, miles: distanceFromHome(e, home) });
-  const all = events.map(withMiles);
-
-  const areas = new Map<string, string>();
-  for (const { e } of all) if (e.area && !areas.has(areaKey(e.area))) areas.set(areaKey(e.area), e.area);
-  const sortedAreas = [...areas.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-  const selectedArea = params.area ? areaKey(params.area) : "";
-
-  let shown = all;
-  if (selectedArea) shown = shown.filter(({ e }) => areaKey(e.area) === selectedArea);
-  if (when) {
-    const range = whenRange(when, today);
-    shown = shown.filter(({ e }) => overlaps(e, range));
-  }
-  const unlocated = within ? shown.filter((i) => i.miles == null).length : 0;
-  if (within) shown = shown.filter((i) => i.miles != null && i.miles <= within);
-  if (nearestFirst) shown = [...shown].sort((a, b) => (a.miles ?? Infinity) - (b.miles ?? Infinity));
-  if (newestFirst) shown = [...shown].sort((a, b) => new Date(b.e.created_at).getTime() - new Date(a.e.created_at).getTime());
+  const home = await homePoint();
+  const listing = await listEvents(params, today, home);
+  const { showPast, when, within, selectedArea, unlocated, hasDistances } = listing;
+  const nearestFirst = listing.sort === "near";
+  const newestFirst = listing.sort === "new";
+  const shown = listing.items;
+  const pending = listing.pending.map((i) => i.e);
+  const sortedAreas = listing.areas;
 
   const href = (change: Partial<Params>) => {
     const next = { ...params, ...change };
@@ -109,7 +85,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<Par
     return s ? `/?${s}` : "/";
   };
 
-  const hasDistances = !!home && all.some((i) => i.miles != null);
   const filtered = !!(selectedArea || when || within);
 
   return (

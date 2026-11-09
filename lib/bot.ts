@@ -4,10 +4,10 @@ import { dedupeKey } from "./dedupe";
 import { extractPoster, parseDateReply } from "./gemini";
 import { distanceFromHome, formatMiles, homePoint, locateEvent, type Point } from "./geo";
 import {
-  claimBatchNotice, enqueue, queueLength, recordOutcome, runWorker, takeBatchTotals, touchActivity,
+  claimBatchNotice, enqueue, forgetUpload, queueLength, recordOutcome, runWorker, takeBatchTotals, touchActivity,
   type BatchTotals, type Outcome, type PosterJob,
 } from "./queue";
-import { downloadFile, escapeHtml as h, sendMessage, sendTyping, type TgMessage, type TgUpdate } from "./telegram";
+import { downloadFile, escapeHtml as h, sendMessage, sendTyping, storeImage, type TgMessage, type TgUpdate } from "./telegram";
 import type { EventRow } from "./types";
 
 const HELP = [
@@ -116,16 +116,23 @@ export async function startWorker(origin: string): Promise<void> {
   await runWorker({
     process: async (job) => {
       const outcome = await processPoster(job);
-      await recordOutcome(job.chat_id, outcome);
+      await recordOutcome(job.chat_id, outcome, job.source === "upload");
     },
     giveUp: async (job) => {
-      await recordOutcome(job.chat_id, "failed");
-      await sendMessage(job.chat_id, "Sorry, I couldn't read this poster after several tries. Send it again later.", job.message_id);
+      await recordOutcome(job.chat_id, "failed", job.source === "upload");
+      if (job.source === "upload") {
+        if (job.image_hash) await forgetUpload(job.image_hash); // so the next auto-import can try again
+      } else {
+        await sendMessage(job.chat_id, "Sorry, I couldn't read this poster after several tries. Send it again later.", job.message_id);
+      }
     },
     onIdle: async () => {
       const totals = await takeBatchTotals();
       if (totals === "wait") return false;
-      if (totals?.chat_id && batchSize(totals) >= 2) await sendMessage(totals.chat_id, batchSummary(totals, origin));
+      // Auto-imports always get a summary (they have no per-image replies); shared batches from 2 up.
+      if (totals?.chat_id && (totals.uploaded > 0 || batchSize(totals) >= 2)) {
+        await sendMessage(totals.chat_id, batchSummary(totals, origin));
+      }
       return true;
     },
     handOver: async () => {
@@ -144,32 +151,62 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 /** "All done! 59 posters checked: 41 added, …" */
 export function batchSummary(t: BatchTotals, origin: string): string {
   const added = t.added + t.needs_date;
+  const auto = t.uploaded > 0;
+  const allAuto = t.uploaded === batchSize(t);
+  const noun = allAuto ? ["new image", "new images"] : ["poster", "posters"];
+  const needsDate = t.needs_date
+    ? auto
+      ? ` (${t.needs_date} need${t.needs_date === 1 ? "s" : ""} a date: set it in the app or on the website)`
+      : ` (${t.needs_date} need${t.needs_date === 1 ? "s" : ""} a date: reply to ${t.needs_date === 1 ? "its message" : "their messages"})`
+    : "";
   const lines = [
-    `<b>All done!</b> ${plural(batchSize(t), "poster", "posters")} checked:`,
-    added ? `✅ ${added} added${t.needs_date ? ` (${t.needs_date} need${t.needs_date === 1 ? "s" : ""} a date: reply to ${t.needs_date === 1 ? "its message" : "their messages"})` : ""}` : "",
+    `<b>${allAuto ? "Auto-import" : "All done!"}</b> ${plural(batchSize(t), noun[0], noun[1])} checked:`,
+    added ? `✅ ${added} added${needsDate}` : "",
     t.existing ? `🔁 ${plural(t.existing, "was already saved", "were already saved")}` : "",
     t.not_poster ? `🚫 ${plural(t.not_poster, "wasn't an event poster", "weren't event posters")}` : "",
-    t.failed ? `⚠️ ${plural(t.failed, "couldn't be read", "couldn't be read")}, send ${t.failed === 1 ? "it" : "them"} again later` : "",
+    t.failed
+      ? `⚠️ ${plural(t.failed, "couldn't be read", "couldn't be read")}, ${allAuto ? "will retry next import" : `send ${t.failed === 1 ? "it" : "them"} again later`}`
+      : "",
     "",
     origin,
   ];
   return lines.filter((l, i) => l || i === lines.length - 2).join("\n");
 }
 
-/** Read one poster and save it. Throws on Gemini/network errors so the queue can retry. */
-export async function processPoster(
-  job: Pick<PosterJob, "chat_id" | "message_id" | "file_id" | "thumb_file_id" | "file_unique_id" | "caption">,
-): Promise<Outcome> {
-  const chatId = job.chat_id;
-  const file = { fileId: job.file_id, uniqueId: job.file_unique_id, thumbId: job.thumb_file_id ?? job.file_id };
-  const msg = { message_id: job.message_id };
+/** The chat posters belong to (the bot owner's). */
+export function ownerChatId(): number | null {
+  const first = (process.env.ALLOWED_CHAT_ID ?? "").split(",")[0]?.trim();
+  return first ? Number(first) : null;
+}
 
-  await sendTyping(chatId);
-  const { bytes, mimeType } = await downloadFile(file.fileId);
+type ProcessableJob = Pick<
+  PosterJob,
+  "chat_id" | "message_id" | "file_id" | "thumb_file_id" | "file_unique_id" | "caption"
+> & Partial<Pick<PosterJob, "source" | "image_b64" | "mime">>;
+
+/**
+ * Read one poster and save it. Throws on Gemini/network errors so the queue can retry.
+ * Images uploaded by the app are handled quietly: no reply per image (the batch summary covers
+ * them), and only images that turn out to be posters are stored on Telegram.
+ */
+export async function processPoster(job: ProcessableJob): Promise<Outcome> {
+  const chatId = job.chat_id;
+  const quiet = job.source === "upload";
+  const reply = (text: string) => (quiet ? Promise.resolve(null) : sendMessage(chatId, text, job.message_id));
+
+  let bytes: Uint8Array;
+  let mimeType: string;
+  if (job.image_b64) {
+    bytes = new Uint8Array(Buffer.from(job.image_b64, "base64"));
+    mimeType = job.mime ?? "image/jpeg";
+  } else {
+    await sendTyping(chatId);
+    ({ bytes, mimeType } = await downloadFile(job.file_id!));
+  }
   const x = await extractPoster(bytes, mimeType, job.caption ?? undefined);
 
   if (!x.is_event || !x.title) {
-    await sendMessage(chatId, "Doesn't look like an event poster, so I skipped it.", msg.message_id);
+    await reply("Doesn't look like an event poster, so I skipped it.");
     return "not_poster";
   }
 
@@ -177,10 +214,15 @@ export async function processPoster(
   if (key) {
     const dup = await db.findByDedupeKey(key);
     if (dup) {
-      await sendMessage(chatId, `Already have this one:\n${summary(dup)}`, msg.message_id);
+      await reply(`Already have this one:\n${summary(dup)}`);
       return "existing";
     }
   }
+
+  // App uploads have no Telegram file yet: store the poster there now.
+  const file = job.file_id
+    ? { fileId: job.file_id, uniqueId: job.file_unique_id, thumbId: job.thumb_file_id ?? job.file_id }
+    : await storeImage(chatId, bytes, mimeType);
 
   const home = await homePoint();
   const geo = await locateEvent(x, home).catch(() => null);
@@ -209,15 +251,16 @@ export async function processPoster(
   });
   if (!row) {
     // Lost a race with an identical poster sent at the same moment.
-    await sendMessage(chatId, "Already have this one.", msg.message_id);
+    await reply("Already have this one.");
     return "existing";
   }
 
-  const reply = row.status === "pending"
-    ? `Added, but I couldn't find a date:\n${summary(row, home)}\n\n<b>Reply to this message with the date</b> (e.g. <i>Sat 14 Nov 6pm</i>).`
-    : `Added:\n${summary(row, home)}`;
-  const sent = await sendMessage(chatId, reply, msg.message_id);
-  await db.setBotMessage(row.id, sent.message_id);
+  const sent = await reply(
+    row.status === "pending"
+      ? `Added, but I couldn't find a date:\n${summary(row, home)}\n\n<b>Reply to this message with the date</b> (e.g. <i>Sat 14 Nov 6pm</i>).`
+      : `Added:\n${summary(row, home)}`,
+  );
+  if (sent) await db.setBotMessage(row.id, sent.message_id);
   return row.status === "pending" ? "needs_date" : "added";
 }
 

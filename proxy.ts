@@ -1,10 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE, safeEqual, sessionToken } from "@/lib/auth";
+import { SESSION_COOKIE, hasApiKey, safeEqual, sessionToken } from "@/lib/auth";
 
 export async function proxy(req: NextRequest) {
   if (!process.env.APP_PASSCODE) {
     return new NextResponse("Set APP_PASSCODE to use the web app.", { status: 503 });
   }
+  // The Android app uses an API key for its endpoints and poster images.
+  const path = req.nextUrl.pathname;
+  if ((path.startsWith("/api/v1/") || path.startsWith("/api/image/")) && hasApiKey(req)) return NextResponse.next();
+
   const cookie = req.cookies.get(SESSION_COOKIE)?.value ?? "";
   if (cookie && safeEqual(cookie, await sessionToken())) return NextResponse.next();
 

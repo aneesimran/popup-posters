@@ -27,6 +27,7 @@ Everything runs on free tiers: Telegram bot, Vercel Hobby, Neon Postgres, and th
    - `GEMINI_MODEL`: optional; leave unset. The app uses `gemini-3.5-flash-lite` and falls back to `gemini-3.5-flash`
    - `APP_PASSCODE`: the passcode for the web page
    - `HOME_POSTCODE`: your postcode, for "miles from home" and the distance filter
+   - `APP_API_KEY`: a long random string the Popups Android app uses (`openssl rand -hex 32`)
    - leave `ALLOWED_CHAT_ID` for step 7
 
    Then redeploy.
@@ -49,3 +50,11 @@ npm test         # unit tests
 Free-tier note: Google may use content sent on the Gemini API free tier to improve its models. Public event posters are fine, but don't send anything private to the bot.
 
 After changing `HOME_POSTCODE` nothing needs re-running: distances are worked out when the page loads. `npm run geo:backfill` fills in locations for any events that are missing one.
+
+## Android app API
+
+The Popups Android app (popup-event-tracker) talks to these endpoints with `Authorization: Bearer $APP_API_KEY`:
+
+- `GET /api/v1/events?q=&when=&within=&area=&sort=near|new&past=1` lists events with the same filters as the website, plus text search. `GET /api/v1/events/:id` returns one.
+- `GET /api/image/:fileId` returns a poster image.
+- `POST /api/v1/upload` takes raw image bytes from the auto-import. Images seen before return `{"status":"duplicate"}`; new ones are queued. Only posters are kept, and you get one "Auto-import" summary in Telegram.

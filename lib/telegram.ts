@@ -36,6 +36,26 @@ export function sendMessage(chatId: number, text: string, replyTo?: number) {
   });
 }
 
+/**
+ * Store an image on Telegram and get its file ids, without leaving anything in the chat:
+ * the photo is sent silently and the message deleted straight away (the file stays available).
+ */
+export async function storeImage(chatId: number, bytes: Uint8Array, mimeType: string) {
+  const form = new FormData();
+  form.set("chat_id", String(chatId));
+  form.set("disable_notification", "true");
+  const ext = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
+  form.set("photo", new Blob([bytes as BlobPart], { type: mimeType }), `poster.${ext}`);
+  const res = await fetch(api("sendPhoto"), { method: "POST", body: form, signal: AbortSignal.timeout(30_000) });
+  const json = (await res.json()) as { ok: boolean; result?: TgMessage; description?: string };
+  if (!json.ok || !json.result?.photo?.length) throw new Error(`Telegram sendPhoto failed: ${json.description}`);
+  await call("deleteMessage", { chat_id: chatId, message_id: json.result.message_id }).catch(() => {});
+  const sizes = [...json.result.photo].sort((a, b) => a.width - b.width);
+  const full = sizes[sizes.length - 1];
+  const thumb = sizes.find((s) => s.width >= 480) ?? full;
+  return { fileId: full.file_id, uniqueId: full.file_unique_id, thumbId: thumb.file_id };
+}
+
 export function sendTyping(chatId: number) {
   return call("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
 }

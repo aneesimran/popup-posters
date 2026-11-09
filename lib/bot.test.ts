@@ -30,6 +30,10 @@ vi.mock("./telegram", () => ({
   sendTyping: async () => {},
   downloadFile: async () => ({ bytes: new Uint8Array([1]), mimeType: "image/jpeg" }),
   escapeHtml: (s: string) => s,
+  storeImage: async () => {
+    stored.push(1);
+    return { fileId: "stored-file", uniqueId: "stored-unique", thumbId: "stored-thumb" };
+  },
 }));
 vi.mock("./geo", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./geo")>()),
@@ -38,6 +42,7 @@ vi.mock("./geo", async (importOriginal) => ({
 }));
 // Queue stand-in: posters are read straight away, in order, like the real worker does.
 const outcomes: string[] = [];
+const stored: number[] = [];
 const jobs: Parameters<typeof import("./queue").enqueue>[0][] = [];
 vi.mock("./queue", () => ({
   enqueue: async (job: (typeof jobs)[number]) => {
@@ -86,6 +91,7 @@ beforeEach(() => {
   rows.length = 0;
   sent.length = 0;
   outcomes.length = 0;
+  stored.length = 0;
   process.env.ALLOWED_CHAT_ID = String(ME);
 });
 
@@ -156,7 +162,7 @@ describe("handleUpdate", () => {
 describe("batchSummary", async () => {
   const { batchSummary } = await import("./bot");
   it("sums up a batch, leaving out empty lines", () => {
-    const text = batchSummary({ chat_id: 1, added: 40, needs_date: 1, existing: 12, not_poster: 5, failed: 0 }, "https://x.app");
+    const text = batchSummary({ chat_id: 1, added: 40, needs_date: 1, existing: 12, not_poster: 5, failed: 0, uploaded: 0 }, "https://x.app");
     expect(text).toBe([
       "<b>All done!</b> 58 posters checked:",
       "✅ 41 added (1 needs a date: reply to its message)",
@@ -167,10 +173,41 @@ describe("batchSummary", async () => {
     ].join("\n"));
   });
   it("handles singulars", () => {
-    const text = batchSummary({ chat_id: 1, added: 0, needs_date: 0, existing: 1, not_poster: 1, failed: 1 }, "https://x.app");
+    const text = batchSummary({ chat_id: 1, added: 0, needs_date: 0, existing: 1, not_poster: 1, failed: 1, uploaded: 0 }, "https://x.app");
     expect(text).toContain("🔁 1 was already saved");
     expect(text).toContain("🚫 1 wasn't an event poster");
     expect(text).toContain("⚠️ 1 couldn't be read, send it again later");
     expect(text).not.toContain("added");
+  });
+});
+
+describe("app uploads (auto-import)", async () => {
+  const { processPoster, batchSummary } = await import("./bot");
+  const upload = {
+    chat_id: ME, message_id: 0, file_id: null, thumb_file_id: null, file_unique_id: null, caption: null,
+    source: "upload" as const, image_b64: Buffer.from([0xff, 0xd8, 0xff]).toString("base64"), mime: "image/jpeg",
+  };
+
+  it("stores a poster on Telegram and saves it without replying", async () => {
+    extraction = event();
+    expect(await processPoster(upload)).toBe("added");
+    expect(stored).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ file_id: "stored-file", thumb_file_id: "stored-thumb", bot_msg_id: null });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("discards non-posters without storing them", async () => {
+    extraction = event({ is_event: false });
+    expect(await processPoster(upload)).toBe("not_poster");
+    expect(stored).toHaveLength(0);
+    expect(rows).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("labels an auto-import summary", () => {
+    const text = batchSummary({ chat_id: 1, added: 3, needs_date: 1, existing: 0, not_poster: 10, failed: 1, uploaded: 15 }, "https://x.app");
+    expect(text).toContain("<b>Auto-import</b> 15 new images checked:");
+    expect(text).toContain("✅ 4 added (1 needs a date: set it in the app or on the website)");
+    expect(text).toContain("⚠️ 1 couldn't be read, will retry next import");
   });
 });

@@ -63,3 +63,17 @@ alter table bot_state add column if not exists last_activity_at timestamptz;
 -- City or county the area is in ("London", "Birmingham", "Kent"), so place names that repeat
 -- across the UK (Tower Hamlets, Aston, Milton…) are looked up in the right place.
 alter table events add column if not exists region text;
+
+-- Images uploaded by the Android app (auto-import from WhatsApp). Their bytes wait in the queue;
+-- only posters are then stored on Telegram. Fingerprints stop the same image being read twice.
+create table if not exists uploaded_images (
+  hash       text primary key,   -- SHA-256 of the image bytes
+  created_at timestamptz not null default now()
+);
+alter table poster_jobs alter column file_id drop not null;
+alter table poster_jobs alter column file_unique_id drop not null;
+alter table poster_jobs add column if not exists source text not null default 'telegram';  -- telegram | upload
+alter table poster_jobs add column if not exists image bytea;
+alter table poster_jobs add column if not exists mime text;
+alter table poster_jobs add column if not exists image_hash text;
+alter table bot_state add column if not exists batch_uploaded int not null default 0;

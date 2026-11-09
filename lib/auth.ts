@@ -14,3 +14,10 @@ export function safeEqual(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/** The Android app sends `Authorization: Bearer <APP_API_KEY>`. */
+export function hasApiKey(req: Request): boolean {
+  const key = process.env.APP_API_KEY ?? "";
+  const header = req.headers.get("authorization") ?? "";
+  return key.length >= 16 && header.startsWith("Bearer ") && safeEqual(header.slice(7), key);
+}

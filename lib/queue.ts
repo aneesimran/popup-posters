@@ -7,11 +7,17 @@ export type PosterJob = {
   id: number;
   chat_id: number;
   message_id: number;
-  file_id: string;
+  /** Telegram file for posters shared to the bot; null for app uploads. */
+  file_id: string | null;
   thumb_file_id: string | null;
-  file_unique_id: string;
+  file_unique_id: string | null;
   caption: string | null;
   attempts: number;
+  source: "telegram" | "upload";
+  /** App uploads: the image itself, base64-encoded, until it's been read. */
+  image_b64: string | null;
+  mime: string | null;
+  image_hash: string | null;
 };
 
 /** Minimum gap between Gemini calls (Flash-Lite free tier: 10 a minute). */
@@ -32,7 +38,9 @@ let client: ReturnType<typeof neon> | null = null;
 const sql = () => (client ??= neon(process.env.DATABASE_URL!));
 
 /** Returns false if this exact image is already waiting in the queue. */
-export async function enqueue(job: Omit<PosterJob, "id" | "attempts">): Promise<boolean> {
+export async function enqueue(
+  job: Omit<PosterJob, "id" | "attempts" | "source" | "image_b64" | "mime" | "image_hash"> & { file_id: string; file_unique_id: string },
+): Promise<boolean> {
   const rows = (await sql()`
     insert into poster_jobs (chat_id, message_id, file_id, thumb_file_id, file_unique_id, caption)
     values (${job.chat_id}, ${job.message_id}, ${job.file_id}, ${job.thumb_file_id}, ${job.file_unique_id}, ${job.caption})
@@ -67,8 +75,29 @@ async function releaseLease() {
 
 async function nextJob(): Promise<PosterJob | null> {
   const rows = (await sql()`
-    select * from poster_jobs where next_attempt_at <= now() order by next_attempt_at, id limit 1`) as PosterJob[];
+    select id, chat_id, message_id, file_id, thumb_file_id, file_unique_id, caption, attempts, source, mime, image_hash,
+           encode(image, 'base64') as image_b64
+    from poster_jobs where next_attempt_at <= now() order by next_attempt_at, id limit 1`) as PosterJob[];
   return rows[0] ?? null;
+}
+
+/**
+ * Queue an image uploaded by the app. Returns false if this exact image was uploaded before
+ * (fingerprint match), so nothing is read twice.
+ */
+export async function enqueueUpload(u: { chat_id: number; image: Uint8Array; mime: string; hash: string }): Promise<boolean> {
+  const fresh = (await sql()`
+    insert into uploaded_images (hash) values (${u.hash}) on conflict (hash) do nothing returning hash`) as unknown[];
+  if (!fresh.length) return false;
+  await sql()`
+    insert into poster_jobs (chat_id, message_id, source, image, mime, image_hash)
+    values (${u.chat_id}, 0, 'upload', decode(${Buffer.from(u.image).toString("base64")}, 'base64'), ${u.mime}, ${u.hash})`;
+  return true;
+}
+
+/** Let an image be uploaded again (used when it couldn't be read after every retry). */
+export async function forgetUpload(hash: string) {
+  await sql()`delete from uploaded_images where hash = ${hash}`;
 }
 
 async function finish(id: number) {
@@ -93,6 +122,8 @@ export async function claimBatchNotice(): Promise<boolean> {
 export type Outcome = "added" | "needs_date" | "existing" | "not_poster" | "failed";
 
 export type BatchTotals = {
+  /** How many of this batch's results came from app uploads (auto-import). */
+  uploaded: number;
   chat_id: number | null;
   added: number;
   needs_date: number;
@@ -105,7 +136,7 @@ export type BatchTotals = {
 export const QUIET_SECONDS = 12;
 
 /** Add one poster's result to the running batch totals. */
-export async function recordOutcome(chatId: number, outcome: Outcome) {
+export async function recordOutcome(chatId: number, outcome: Outcome, uploaded = false) {
   const one = (o: Outcome) => (o === outcome ? 1 : 0);
   await sql()`
     update bot_state set
@@ -115,6 +146,7 @@ export async function recordOutcome(chatId: number, outcome: Outcome) {
       batch_existing = batch_existing + ${one("existing")},
       batch_not_poster = batch_not_poster + ${one("not_poster")},
       batch_failed = batch_failed + ${one("failed")},
+      batch_uploaded = batch_uploaded + ${uploaded ? 1 : 0},
       last_activity_at = now()
     where id = 1`;
 }
@@ -131,13 +163,15 @@ export async function touchActivity() {
 export async function takeBatchTotals(): Promise<BatchTotals | "wait" | null> {
   const rows = (await sql()`
     with old as (select * from bot_state where id = 1 for update)
-    update bot_state b set batch_added = 0, batch_needs_date = 0, batch_existing = 0, batch_not_poster = 0, batch_failed = 0
+    update bot_state b set batch_added = 0, batch_needs_date = 0, batch_existing = 0, batch_not_poster = 0, batch_failed = 0,
+      batch_uploaded = 0
     from old
     where b.id = 1
       and old.batch_added + old.batch_needs_date + old.batch_existing + old.batch_not_poster + old.batch_failed > 0
       and (old.last_activity_at is null or old.last_activity_at < now() - make_interval(secs => ${QUIET_SECONDS}))
     returning old.batch_chat_id as chat_id, old.batch_added as added, old.batch_needs_date as needs_date,
-              old.batch_existing as existing, old.batch_not_poster as not_poster, old.batch_failed as failed`) as BatchTotals[];
+              old.batch_existing as existing, old.batch_not_poster as not_poster, old.batch_failed as failed,
+              old.batch_uploaded as uploaded`) as BatchTotals[];
   if (rows[0]) return rows[0];
   const pending = (await sql()`
     select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_failed as n from bot_state where id = 1`) as { n: number }[];
