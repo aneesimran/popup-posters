@@ -13,7 +13,8 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
   const e = Number.isInteger(Number(id)) ? await getEvent(Number(id)) : null;
   if (!e) notFound();
 
-  const image = `/api/image/${encodeURIComponent(e.file_id)}`;
+  const original = `/api/image/${encodeURIComponent(e.file_id)}`;
+  const image = `${original}?w=1080`;
   const time = e.start_time ? formatTime(e.start_time) + (e.end_time ? `–${formatTime(e.end_time)}` : "") : null;
   const mapQuery = [e.venue, e.area, e.postcode].filter(Boolean).join(", ");
   const miles = distanceFromHome(e, await homePoint());
@@ -24,7 +25,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
         <Link href="/" className="text-sm text-accent">← All events</Link>
       </header>
       <div className="grid gap-6 md:grid-cols-2">
-        <a href={image} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border border-line bg-card">
+        <a href={original} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border border-line bg-card">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={image} alt={`Poster for ${e.title}`} className="w-full" />
         </a>

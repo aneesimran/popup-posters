@@ -11,7 +11,7 @@ export default function EventCard({ e, miles, showDate = false }: { e: EventRow;
       <div className="aspect-[4/5] overflow-hidden bg-line">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`/api/image/${encodeURIComponent(e.thumb_file_id ?? e.file_id)}`}
+          src={`/api/image/${encodeURIComponent(e.file_id)}?w=480`}
           alt=""
           loading="lazy"
           className="h-full w-full object-cover transition group-hover:scale-[1.02]"

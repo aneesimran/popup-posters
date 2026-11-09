@@ -18,13 +18,17 @@ export type ApiEvent = {
   status: "active" | "pending";
   miles: number | null;
   createdAt: string;
+  /** 1080px WebP for the detail view. */
   imageUrl: string;
+  /** 480px WebP for cards. */
   thumbUrl: string;
+  /** The poster as stored, for zooming in. */
+  originalUrl: string;
   webUrl: string;
 };
 
 export function toApiEvent({ e, miles }: ListItem, origin: string): ApiEvent {
-  const image = (id: string) => `${origin}/api/image/${encodeURIComponent(id)}`;
+  const image = (id: string, w?: number) => `${origin}/api/image/${encodeURIComponent(id)}${w ? `?w=${w}` : ""}`;
   return {
     id: e.id,
     title: e.title,
@@ -41,8 +45,10 @@ export function toApiEvent({ e, miles }: ListItem, origin: string): ApiEvent {
     status: e.status,
     miles: miles == null ? null : Math.round(miles * 10) / 10,
     createdAt: new Date(e.created_at).toISOString(),
-    imageUrl: image(e.file_id),
-    thumbUrl: image(e.thumb_file_id ?? e.file_id),
+    imageUrl: image(e.file_id, 1080),
+    // Resize the full image rather than Telegram's 800px copy: sharper at the same small size.
+    thumbUrl: image(e.file_id, 480),
+    originalUrl: image(e.file_id),
     webUrl: `${origin}/event/${e.id}`,
   };
 }
