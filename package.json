@@ -10,7 +10,8 @@
     "test": "vitest run",
     "db:init": "node --env-file=.env.local scripts/init-db.mjs",
     "set-webhook": "node --env-file=.env.local scripts/set-webhook.mjs",
-    "geo:backfill": "tsx --env-file=.env.local scripts/backfill-geo.ts"
+    "geo:backfill": "tsx --env-file=.env.local scripts/backfill-geo.ts",
+    "recheck-popups": "tsx --env-file=.env.local scripts/recheck-popups.ts"
   },
   "dependencies": {
     "@google/genai": "^3.0.0",
