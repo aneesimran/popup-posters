@@ -53,11 +53,12 @@ const nullableString = { type: ["string", "null"] };
 
 /** What counts as a popup: an event where traders can have a stall. Shared by the poster read and the re-check. */
 const STALLS_RULE = [
-  "has_stalls is true when the event has stalls or traders, or is asking for them:",
-  "markets, bazaars, souks, craft or food fairs, expos, trade shows, exhibitions with stands, car boot sales,",
-  "fun days or festivals with stalls, or ANY poster inviting stallholders, traders, vendors or exhibitors (e.g. 'stalls available', 'traders wanted', 'book a table').",
-  "has_stalls is false for events without stalls: conferences, talks or lectures, dinners and galas, shows and concerts,",
-  "classes, courses, schools or homeschooling, religious gatherings, sports, fundraisers or charity events with no stalls mentioned.",
+  "has_stalls is true when the event has stalls or traders, asks for them, or is the kind of community event that usually lets a few stalls in:",
+  "markets, bazaars, souks, craft or food fairs, expos, trade shows, exhibitions with stands, car boot sales, fun days and festivals (including Eid festivals),",
+  "charity, fundraising, auction or gala dinners, quiz nights with dinners or auctions, nasheed shows and tours, fashion shows and galas,",
+  "and ANY poster inviting stallholders, traders, vendors or exhibitors (e.g. 'stalls available', 'traders wanted', 'book a table').",
+  "has_stalls is false for things that never have stalls: classes, courses, tuition, schools or homeschooling, lectures and talks,",
+  "online or Zoom meetings, networking meetups, tours and visits, sports sessions, and adverts for a product, service, party package or pre-orders.",
 ].join(" ");
 
 const posterSchema = {
