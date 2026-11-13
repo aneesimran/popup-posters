@@ -113,3 +113,13 @@ export async function allEvents(): Promise<EventRow[]> {
 export async function setRegion(id: number, region: string) {
   await sql()`update events set region = ${region} where id = ${id}`;
 }
+
+/**
+ * Delete several events. Their image fingerprints stay in uploaded_images,
+ * so the auto-import won't bring the same pictures back.
+ */
+export async function deleteEvents(ids: number[]): Promise<number> {
+  if (!ids.length) return 0;
+  const rows = (await sql()`delete from events where id = any(${ids}::int[]) returning id`) as { id: number }[];
+  return rows.length;
+}

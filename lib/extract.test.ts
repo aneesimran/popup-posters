@@ -26,6 +26,12 @@ describe("normalizeExtraction", () => {
     expect(normalizeExtraction({ is_event: true, title: "A", venue: "N/A", price: "unknown" })).toMatchObject({ venue: null, price: null });
   });
 
+  it("only skips stall-less events on an explicit no", () => {
+    expect(normalizeExtraction({ is_event: true, title: "A", has_stalls: false }).has_stalls).toBe(false);
+    expect(normalizeExtraction({ is_event: true, title: "A", has_stalls: true }).has_stalls).toBe(true);
+    expect(normalizeExtraction({ is_event: true, title: "A" }).has_stalls).toBe(true);
+  });
+
   it("is not an event without a title, or with garbage input", () => {
     expect(normalizeExtraction({ is_event: true, title: "" }).is_event).toBe(false);
     expect(normalizeExtraction(null).is_event).toBe(false);

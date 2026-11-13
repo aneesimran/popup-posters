@@ -77,3 +77,6 @@ alter table poster_jobs add column if not exists image bytea;
 alter table poster_jobs add column if not exists mime text;
 alter table poster_jobs add column if not exists image_hash text;
 alter table bot_state add column if not exists batch_uploaded int not null default 0;
+
+-- Posters skipped because the event has no stalls (not a popup)
+alter table bot_state add column if not exists batch_not_popup int not null default 0;

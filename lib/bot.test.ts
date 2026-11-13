@@ -82,7 +82,7 @@ const text = (t: string, replyTo?: number) => ({
   },
 });
 const event = (over: Partial<Extraction> = {}): Extraction => ({
-  is_event: true, title: "Winter Night Market", start_date: "2026-11-14", end_date: null, start_time: "18:00",
+  is_event: true, has_stalls: true, title: "Winter Night Market", start_date: "2026-11-14", end_date: null, start_time: "18:00",
   end_time: null, venue: "Ilford Town Hall", area: "Ilford", price: "Free", description: null, postcode: null, region: "London", ...over,
 });
 const last = () => sent[sent.length - 1].text;
@@ -104,6 +104,14 @@ describe("handleUpdate", () => {
     expect(last()).toContain("Added:");
     expect(last()).toMatch(/Ilford Town Hall · \d\.\d mi from home/);
     expect(last()).toContain("Sat 14 Nov, 6pm");
+  });
+
+  it("skips events without stalls (not popups) and says so", async () => {
+    extraction = event({ title: "Charity Gala Dinner", has_stalls: false });
+    await handleUpdate(photo("gala"), ORIGIN);
+    expect(rows).toHaveLength(0);
+    expect(outcomes).toEqual(["not_popup"]);
+    expect(last()).toContain("Charity Gala Dinner</b> isn't a popup or stall event");
   });
 
   it("skips non-events", async () => {
@@ -162,7 +170,7 @@ describe("handleUpdate", () => {
 describe("batchSummary", async () => {
   const { batchSummary } = await import("./bot");
   it("sums up a batch, leaving out empty lines", () => {
-    const text = batchSummary({ chat_id: 1, added: 40, needs_date: 1, existing: 12, not_poster: 5, failed: 0, uploaded: 0 }, "https://x.app");
+    const text = batchSummary({ chat_id: 1, added: 40, needs_date: 1, existing: 12, not_poster: 5, failed: 0, uploaded: 0, not_popup: 0 }, "https://x.app");
     expect(text).toBe([
       "<b>All done!</b> 58 posters checked:",
       "✅ 41 added (1 needs a date: reply to its message)",
@@ -173,7 +181,7 @@ describe("batchSummary", async () => {
     ].join("\n"));
   });
   it("handles singulars", () => {
-    const text = batchSummary({ chat_id: 1, added: 0, needs_date: 0, existing: 1, not_poster: 1, failed: 1, uploaded: 0 }, "https://x.app");
+    const text = batchSummary({ chat_id: 1, added: 0, needs_date: 0, existing: 1, not_poster: 1, failed: 1, uploaded: 0, not_popup: 0 }, "https://x.app");
     expect(text).toContain("🔁 1 was already saved");
     expect(text).toContain("🚫 1 wasn't an event poster");
     expect(text).toContain("⚠️ 1 couldn't be read, send it again later");
@@ -205,9 +213,10 @@ describe("app uploads (auto-import)", async () => {
   });
 
   it("labels an auto-import summary", () => {
-    const text = batchSummary({ chat_id: 1, added: 3, needs_date: 1, existing: 0, not_poster: 10, failed: 1, uploaded: 15 }, "https://x.app");
-    expect(text).toContain("<b>Auto-import</b> 15 new images checked:");
+    const text = batchSummary({ chat_id: 1, added: 3, needs_date: 1, existing: 0, not_poster: 10, failed: 1, uploaded: 17, not_popup: 2 }, "https://x.app");
     expect(text).toContain("✅ 4 added (1 needs a date: set it in the app or on the website)");
     expect(text).toContain("⚠️ 1 couldn't be read, will retry next import");
+    expect(text).toContain("🎪 2 weren't popup or stall events");
+    expect(text).toContain("<b>Auto-import</b> 17 new images checked:");
   });
 });

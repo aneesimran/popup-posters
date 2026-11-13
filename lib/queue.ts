@@ -119,7 +119,7 @@ export async function claimBatchNotice(): Promise<boolean> {
   return rows.length > 0;
 }
 
-export type Outcome = "added" | "needs_date" | "existing" | "not_poster" | "failed";
+export type Outcome = "added" | "needs_date" | "existing" | "not_poster" | "not_popup" | "failed";
 
 export type BatchTotals = {
   /** How many of this batch's results came from app uploads (auto-import). */
@@ -129,6 +129,7 @@ export type BatchTotals = {
   needs_date: number;
   existing: number;
   not_poster: number;
+  not_popup: number;
   failed: number;
 };
 
@@ -145,6 +146,7 @@ export async function recordOutcome(chatId: number, outcome: Outcome, uploaded =
       batch_needs_date = batch_needs_date + ${one("needs_date")},
       batch_existing = batch_existing + ${one("existing")},
       batch_not_poster = batch_not_poster + ${one("not_poster")},
+      batch_not_popup = batch_not_popup + ${one("not_popup")},
       batch_failed = batch_failed + ${one("failed")},
       batch_uploaded = batch_uploaded + ${uploaded ? 1 : 0},
       last_activity_at = now()
@@ -163,18 +165,18 @@ export async function touchActivity() {
 export async function takeBatchTotals(): Promise<BatchTotals | "wait" | null> {
   const rows = (await sql()`
     with old as (select * from bot_state where id = 1 for update)
-    update bot_state b set batch_added = 0, batch_needs_date = 0, batch_existing = 0, batch_not_poster = 0, batch_failed = 0,
+    update bot_state b set batch_added = 0, batch_needs_date = 0, batch_existing = 0, batch_not_poster = 0, batch_not_popup = 0, batch_failed = 0,
       batch_uploaded = 0
     from old
     where b.id = 1
-      and old.batch_added + old.batch_needs_date + old.batch_existing + old.batch_not_poster + old.batch_failed > 0
+      and old.batch_added + old.batch_needs_date + old.batch_existing + old.batch_not_poster + old.batch_not_popup + old.batch_failed > 0
       and (old.last_activity_at is null or old.last_activity_at < now() - make_interval(secs => ${QUIET_SECONDS}))
     returning old.batch_chat_id as chat_id, old.batch_added as added, old.batch_needs_date as needs_date,
-              old.batch_existing as existing, old.batch_not_poster as not_poster, old.batch_failed as failed,
+              old.batch_existing as existing, old.batch_not_poster as not_poster, old.batch_not_popup as not_popup, old.batch_failed as failed,
               old.batch_uploaded as uploaded`) as BatchTotals[];
   if (rows[0]) return rows[0];
   const pending = (await sql()`
-    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_failed as n from bot_state where id = 1`) as { n: number }[];
+    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_not_popup + batch_failed as n from bot_state where id = 1`) as { n: number }[];
   return (pending[0]?.n ?? 0) > 0 ? "wait" : null;
 }
 
@@ -258,6 +260,6 @@ export async function runWorker(h: Handlers): Promise<void> {
 
 async function takeBatchTotalsPeek(): Promise<boolean> {
   const rows = (await sql()`
-    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_failed as n from bot_state where id = 1`) as { n: number }[];
+    select batch_added + batch_needs_date + batch_existing + batch_not_poster + batch_not_popup + batch_failed as n from bot_state where id = 1`) as { n: number }[];
   return (rows[0]?.n ?? 0) > 0;
 }

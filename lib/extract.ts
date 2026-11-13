@@ -24,6 +24,8 @@ export function normalizeExtraction(input: unknown): Extraction {
   const title = str(raw.title, 120);
   return {
     is_event: raw.is_event === true && !!title,
+    // Only an explicit "no" skips an event, so a missing answer never loses a real popup.
+    has_stalls: raw.has_stalls !== false,
     title,
     ...dates(raw),
     venue: str(raw.venue, 160),

@@ -51,10 +51,20 @@ async function generateJson(contents: Contents, schema: object): Promise<unknown
 
 const nullableString = { type: ["string", "null"] };
 
+/** What counts as a popup: an event where traders can have a stall. Shared by the poster read and the re-check. */
+const STALLS_RULE = [
+  "has_stalls is true when the event has stalls or traders, or is asking for them:",
+  "markets, bazaars, souks, craft or food fairs, expos, trade shows, exhibitions with stands, car boot sales,",
+  "fun days or festivals with stalls, or ANY poster inviting stallholders, traders, vendors or exhibitors (e.g. 'stalls available', 'traders wanted', 'book a table').",
+  "has_stalls is false for events without stalls: conferences, talks or lectures, dinners and galas, shows and concerts,",
+  "classes, courses, schools or homeschooling, religious gatherings, sports, fundraisers or charity events with no stalls mentioned.",
+].join(" ");
+
 const posterSchema = {
   type: "object",
   properties: {
     is_event: { type: "boolean", description: "true only if this image advertises an event, popup, market, class or similar" },
+    has_stalls: { type: "boolean", description: "Does this event have stalls/traders, or ask for them? See the rules in the prompt." },
     title: { ...nullableString, description: "Short event name" },
     start_date: { ...nullableString, description: "YYYY-MM-DD, or null if no date is shown" },
     end_date: { ...nullableString, description: "YYYY-MM-DD last day for multi-day events, else null" },
@@ -73,7 +83,7 @@ const posterSchema = {
     price: { ...nullableString, description: "e.g. 'Free', '£5', '£10–£15'" },
     description: { ...nullableString, description: "One short sentence on what the event is" },
   },
-  required: ["is_event", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "postcode", "region", "price", "description"],
+  required: ["is_event", "has_stalls", "title", "start_date", "end_date", "start_time", "end_time", "venue", "area", "postcode", "region", "price", "description"],
 };
 
 const dateSchema = {
@@ -100,6 +110,7 @@ export async function extractPoster(image: Uint8Array, mimeType: string, caption
     "If the poster gives a day and month but no year, choose the next upcoming occurrence.",
     "If the date range spans several days, put the first day in start_date and the last in end_date.",
     "Use null for anything not shown. Do not guess venues or prices. The area may be inferred from a well-known venue, street or postcode.",
+    STALLS_RULE,
     caption ? `The sender added this caption, which may contain extra details: """${caption}"""` : "",
   ].filter(Boolean).join("\n");
 
@@ -140,4 +151,23 @@ export async function guessRegions(
     },
   })) as { id: number; region: string | null }[];
   return new Map(json.filter((r) => typeof r.region === "string" && r.region.trim()).map((r) => [r.id, r.region!.trim()]));
+}
+
+/** Re-check a saved poster: is it a popup/stall event? Used by scripts/recheck-popups.ts. */
+export async function checkStalls(image: Uint8Array, mimeType: string): Promise<{ has_stalls: boolean; reason: string }> {
+  const json = (await generateJson(
+    [{
+      role: "user",
+      parts: [
+        { inlineData: { mimeType, data: Buffer.from(image).toString("base64") } },
+        { text: `Is this poster for an event with stalls? ${STALLS_RULE} Give a short reason (under 12 words).` },
+      ],
+    }],
+    {
+      type: "object",
+      properties: { has_stalls: { type: "boolean" }, reason: { type: "string" } },
+      required: ["has_stalls", "reason"],
+    },
+  )) as { has_stalls?: unknown; reason?: unknown };
+  return { has_stalls: json.has_stalls !== false, reason: typeof json.reason === "string" ? json.reason.slice(0, 120) : "" };
 }

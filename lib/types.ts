@@ -26,6 +26,8 @@ export type EventRow = {
 
 export type Extraction = {
   is_event: boolean;
+  /** Has stalls/traders or is asking for them (a popup). Non-stall events are skipped. */
+  has_stalls: boolean;
   title: string | null;
   start_date: string | null;
   end_date: string | null;

@@ -145,7 +145,7 @@ export async function startWorker(origin: string): Promise<void> {
   });
 }
 
-const batchSize = (t: BatchTotals) => t.added + t.needs_date + t.existing + t.not_poster + t.failed;
+const batchSize = (t: BatchTotals) => t.added + t.needs_date + t.existing + t.not_poster + t.not_popup + t.failed;
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** "All done! 59 posters checked: 41 added, …" */
@@ -164,6 +164,7 @@ export function batchSummary(t: BatchTotals, origin: string): string {
     added ? `✅ ${added} added${needsDate}` : "",
     t.existing ? `🔁 ${plural(t.existing, "was already saved", "were already saved")}` : "",
     t.not_poster ? `🚫 ${plural(t.not_poster, "wasn't an event poster", "weren't event posters")}` : "",
+    t.not_popup ? `🎪 ${plural(t.not_popup, "wasn't a popup or stall event", "weren't popup or stall events")}` : "",
     t.failed
       ? `⚠️ ${plural(t.failed, "couldn't be read", "couldn't be read")}, ${allAuto ? "will retry next import" : `send ${t.failed === 1 ? "it" : "them"} again later`}`
       : "",
@@ -208,6 +209,10 @@ export async function processPoster(job: ProcessableJob): Promise<Outcome> {
   if (!x.is_event || !x.title) {
     await reply("Doesn't look like an event poster, so I skipped it.");
     return "not_poster";
+  }
+  if (!x.has_stalls) {
+    await reply(`<b>${h(x.title)}</b> isn't a popup or stall event, so I skipped it.`);
+    return "not_popup";
   }
 
   const key = dedupeKey(x.title, x.start_date);
